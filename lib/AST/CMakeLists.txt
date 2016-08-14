@@ -1,4 +1,4 @@
-add_swift_library(swiftAST
+add_swift_library(swiftAST STATIC
   ArchetypeBuilder.cpp
   ASTContext.cpp
   ASTDumper.cpp
@@ -38,6 +38,7 @@ add_swift_library(swiftAST
   SourceEntityWalker.cpp
   Substitution.cpp
   Type.cpp
+  TypeJoinMeet.cpp
   TypeRefinementContext.cpp
   TypeRepr.cpp
   TypeWalker.cpp

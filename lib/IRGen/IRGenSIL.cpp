@@ -19,6 +19,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/ADT/MapVector.h"
@@ -26,6 +27,7 @@
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Support/Debug.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/Basic/TargetInfo.h"
 #include "swift/Basic/Fallthrough.h"
 #include "swift/Basic/Range.h"
 #include "swift/Basic/STLExtras.h"
@@ -344,6 +346,8 @@ public:
   /// Keeps track of the mapping of source variables to -O0 shadow copy allocas.
   llvm::SmallDenseMap<StackSlotKey, Address, 8> ShadowStackSlots;
   llvm::SmallDenseMap<Decl *, SmallString<4>, 8> AnonymousVariables;
+  llvm::SmallVector<std::pair<DominancePoint, llvm::Instruction *>, 8>
+      ValueVariables;
   unsigned NumAnonVars = 0;
   unsigned NumCondFails = 0;
 
@@ -577,7 +581,76 @@ public:
     return Name;
   }
 
-  /// At -O0, emit a shadow copy of an Address in an alloca, so the
+  /// At -Onone, forcibly keep all LLVM values that are tracked by
+  /// debug variables alive by inserting an empty inline assembler
+  /// expression depending on the value in the blocks dominated by the
+  /// value.
+  void emitDebugVariableRangeExtension(const SILBasicBlock *CurBB) {
+    if (IGM.IRGen.Opts.Optimize)
+      return;
+    for (auto &Variable : reversed(ValueVariables)) {
+      auto VarDominancePoint = Variable.first;
+      llvm::Value *Storage = Variable.second;
+      if (getActiveDominancePoint() == VarDominancePoint ||
+          isActiveDominancePointDominatedBy(VarDominancePoint)) {
+        llvm::Type *ArgTys;
+        auto *Ty = Storage->getType()->getScalarType();
+        // Pointers and Floats are expected to fit into a register.
+        if (Ty->isPointerTy() || Ty->isFloatingPointTy())
+          ArgTys = { Storage->getType() };
+        else {
+          // The storage is guaranteed to be no larger than the register width.
+          // Extend the storage so it would fit into a register.
+          llvm::Type *IntTy;
+          switch (IGM.getClangASTContext().getTargetInfo().getRegisterWidth()) {
+          case 64: IntTy = IGM.Int64Ty; break;
+          case 32: IntTy = IGM.Int32Ty; break;
+          default: llvm_unreachable("unsupported register width");
+          }
+          ArgTys = { IntTy };
+          Storage = Builder.CreateZExtOrBitCast(Storage, IntTy);
+        }
+        // Emit an empty inline assembler expression depending on the register.
+        auto *AsmFnTy = llvm::FunctionType::get(IGM.VoidTy, ArgTys, false);
+        auto *InlineAsm = llvm::InlineAsm::get(AsmFnTy, "", "r", true);
+        Builder.CreateCall(InlineAsm, Storage);
+        // Propagate the dbg.value intrinsics into the later basic blocks.  Note
+        // that this shouldn't be necessary. LiveDebugValues should be doing
+        // this but can't in general because it currently only tracks register
+        // locations.
+        auto It = llvm::BasicBlock::iterator(Variable.second);
+        auto *BB = Variable.second->getParent();
+        auto *CurBB = Builder.GetInsertBlock();
+        if (BB != CurBB)
+          for (auto I = std::next(It), E = BB->end(); I != E; ++I) {
+            auto *DVI = dyn_cast<llvm::DbgValueInst>(I);
+            if (DVI && DVI->getValue() == Variable.second)
+              IGM.DebugInfo->getBuilder().insertDbgValueIntrinsic(
+                  DVI->getValue(), 0, DVI->getVariable(), DVI->getExpression(),
+                  DVI->getDebugLoc(), &*CurBB->getFirstInsertionPt());
+            else
+              // Found all dbg.value instrinsics describing this location.
+              break;
+        }
+      }
+    }
+  }
+
+  /// Account for bugs in LLVM.
+  ///
+  /// - The LLVM type legalizer currently doesn't update debug
+  ///   intrinsics when a large value is split up into smaller
+  ///   pieces. Note that this heuristic as a bit too conservative
+  ///   on 32-bit targets as it will also fire for doubles.
+  ///
+  /// - CodeGen Prepare may drop dbg.values pointing to PHI instruction.
+  bool needsShadowCopy(llvm::Value *Storage) {
+    return (IGM.DataLayout.getTypeSizeInBits(Storage->getType()) >
+            IGM.getClangASTContext().getTargetInfo().getRegisterWidth()) ||
+           isa<llvm::PHINode>(Storage);
+  }
+
+  /// At -Onone, emit a shadow copy of an Address in an alloca, so the
   /// register allocator doesn't elide the dbg.value intrinsic when
   /// register pressure is high.  There is a trade-off to this: With
   /// shadow copies, we lose the precise lifetime.
@@ -586,11 +659,22 @@ public:
                               StringRef Name, unsigned ArgNo,
                               Alignment Align = Alignment(0)) {
     auto Ty = Storage->getType();
-    if (IGM.IRGen.Opts.Optimize || (ArgNo == 0) ||
+    // Never emit shadow copies when optimizing, or if already on the stack.
+    if (IGM.IRGen.Opts.Optimize ||
         isa<llvm::AllocaInst>(Storage) ||
         isa<llvm::UndefValue>(Storage) ||
         Ty == IGM.RefCountedPtrTy) // No debug info is emitted for refcounts.
       return Storage;
+
+    // Always emit shadow copies for function arguments.
+    if (ArgNo == 0)
+      // Otherwise only if debug value range extension is not feasible.
+      if (!needsShadowCopy(Storage)) {
+        // Mark for debug value range extension unless this is a constant.
+        if (auto *Value = dyn_cast<llvm::Instruction>(Storage))
+          ValueVariables.push_back({getActiveDominancePoint(), Value});
+        return Storage;
+      }
 
     if (Align.isZero())
       Align = IGM.getPointerAlignment();
@@ -598,6 +682,8 @@ public:
     auto &Alloca = ShadowStackSlots[{ArgNo, {Scope, Name}}];
     if (!Alloca.isValid())
       Alloca = createAlloca(Ty, Align, Name+".addr");
+
+    ArtificialLocation AutoRestore(getDebugScope(), IGM.DebugInfo, Builder);
     Builder.CreateStore(Storage, Alloca.getAddress(), Align);
     return Alloca.getAddress();
   }
@@ -637,6 +723,7 @@ public:
     Alignment align(layout->getAlignment());
 
     auto alloca = createAlloca(aggregateType, align, Name + ".debug");
+    ArtificialLocation AutoRestore(getDebugScope(), IGM.DebugInfo, Builder);
     size_t i = 0;
     for (auto val : vals) {
       auto addr = Builder.CreateStructGEP(alloca, i,
@@ -653,14 +740,17 @@ public:
                                     DebugTypeInfo Ty,
                                     SILType SILTy,
                                     const SILDebugScope *DS,
+                                    ValueDecl *VarDecl,
                                     StringRef Name,
                                     unsigned ArgNo = 0,
                                     IndirectionKind Indirection = DirectValue) {
     // Force all archetypes referenced by the type to be bound by this point.
     // TODO: just make sure that we have a path to them that the debug info
     //       can follow.
-    if (!IGM.IRGen.Opts.Optimize && Ty.getType()->hasArchetype())
-      Ty.getType()->getCanonicalType().visit([&](Type t) {
+    auto runtimeTy = getRuntimeReifiedType(IGM,
+                                           Ty.getType()->getCanonicalType());
+    if (!IGM.IRGen.Opts.Optimize && runtimeTy->hasArchetype())
+      runtimeTy.visit([&](Type t) {
         if (auto archetype = dyn_cast<ArchetypeType>(CanType(t)))
           emitTypeMetadataRef(archetype);
        });
@@ -668,11 +758,11 @@ public:
     assert(IGM.DebugInfo && "debug info not enabled");
     if (ArgNo) {
       PrologueLocation AutoRestore(IGM.DebugInfo, Builder);
-      IGM.DebugInfo->emitVariableDeclaration(Builder, Storage, Ty, DS, Name,
-                                             ArgNo, Indirection);
+      IGM.DebugInfo->emitVariableDeclaration(Builder, Storage, Ty, DS, VarDecl,
+                                             Name, ArgNo, Indirection);
     } else
-      IGM.DebugInfo->emitVariableDeclaration(Builder, Storage, Ty, DS, Name, 0,
-                                             Indirection);
+      IGM.DebugInfo->emitVariableDeclaration(Builder, Storage, Ty, DS, VarDecl,
+                                             Name, 0, Indirection);
   }
 
   void emitFailBB() {
@@ -804,6 +894,8 @@ public:
 
   void visitCopyAddrInst(CopyAddrInst *i);
   void visitDestroyAddrInst(DestroyAddrInst *i);
+
+  void visitBindMemoryInst(BindMemoryInst *i);
 
   void visitCondFailInst(CondFailInst *i);
   
@@ -1202,6 +1294,10 @@ static void emitEntryPointArgumentsCOrObjC(IRGenSILFunction &IGF,
 
   assert(params.empty() && "didn't claim all parameters!");
 
+  // emitPolymorphicParameters() may create function calls, so we need
+  // to initialize the debug location here.
+  ArtificialLocation Loc(IGF.getDebugScope(), IGF.IGM.DebugInfo, IGF.Builder);
+  
   // Bind polymorphic arguments. This can only be done after binding
   // all the value parameters, and must be done even for non-polymorphic
   // functions because of imported Objective-C generics.
@@ -1418,9 +1514,9 @@ void IRGenSILFunction::emitFunctionArgDebugInfo(SILBasicBlock *BB) {
         countArgs(CurSILFn->getDeclContext()) + 1 + BB->getBBArgs().size();
     auto Storage = emitShadowCopy(ErrorResultSlot.getAddress(), getDebugScope(),
                                   Name, ArgNo);
-    IGM.DebugInfo->emitVariableDeclaration(Builder, Storage, DTI,
-                                           getDebugScope(), Name, ArgNo,
-                                           IndirectValue, ArtificialValue);
+    IGM.DebugInfo->emitVariableDeclaration(
+        Builder, Storage, DTI, getDebugScope(), nullptr, Name, ArgNo,
+        IndirectValue, ArtificialValue);
   }
 }
 
@@ -1515,6 +1611,8 @@ void IRGenSILFunction::visitSILBasicBlock(SILBasicBlock *BB) {
           ArgsEmitted = true;
         }
       }
+      if (isa<TermInst>(&I))
+        emitDebugVariableRangeExtension(BB);
     }
     visit(&I);
 
@@ -3134,8 +3232,8 @@ void IRGenSILFunction::visitDebugValueInst(DebugValueInst *i) {
   Explosion e = getLoweredExplosion(SILVal);
   unsigned ArgNo = i->getVarInfo().ArgNo;
   emitShadowCopy(e.claimAll(), i->getDebugScope(), Name, ArgNo, Copy);
-  emitDebugVariableDeclaration(Copy, DbgTy, SILTy, i->getDebugScope(), Name,
-                               ArgNo);
+  emitDebugVariableDeclaration(Copy, DbgTy, SILTy, i->getDebugScope(),
+                               i->getDecl(), Name, ArgNo);
 }
 
 void IRGenSILFunction::visitDebugValueAddrInst(DebugValueAddrInst *i) {
@@ -3164,7 +3262,7 @@ void IRGenSILFunction::visitDebugValueAddrInst(DebugValueAddrInst *i) {
   unsigned ArgNo = i->getVarInfo().ArgNo;
   emitDebugVariableDeclaration(
       emitShadowCopy(Addr, i->getDebugScope(), Name, ArgNo), DbgTy,
-      i->getType(), i->getDebugScope(), Name, ArgNo,
+      i->getType(), i->getDebugScope(), Decl, Name, ArgNo,
       DbgTy.isImplicitlyIndirect() ? DirectValue : IndirectValue);
 }
 
@@ -3362,9 +3460,8 @@ visitIsUniqueOrPinnedInst(swift::IsUniqueOrPinnedInst *i) {
 }
 
 static bool tryDeferFixedSizeBufferInitialization(IRGenSILFunction &IGF,
-                                                  const SILInstruction *allocInst,
+                                                  SILInstruction *allocInst,
                                                   const TypeInfo &ti,
-                                                  SILValue addressValue,
                                                   Address fixedSizeBuffer,
                                                   const llvm::Twine &name) {
   // There's no point in doing this for fixed-sized types, since we'll allocate
@@ -3384,8 +3481,8 @@ static bool tryDeferFixedSizeBufferInitialization(IRGenSILFunction &IGF,
     // Does this instruction use the allocation? If not, continue.
     auto Ops = inst->getAllOperands();
     if (std::none_of(Ops.begin(), Ops.end(),
-                     [&addressValue](const Operand &Op) {
-                       return Op.get() == addressValue;
+                     [allocInst](const Operand &Op) {
+                       return Op.get() == allocInst;
                      }))
       continue;
 
@@ -3409,7 +3506,7 @@ static bool tryDeferFixedSizeBufferInitialization(IRGenSILFunction &IGF,
       IGF.Builder.CreateLifetimeStart(fixedSizeBuffer,
                                       getFixedBufferSize(IGF.IGM));
     }
-    IGF.setContainerOfUnallocatedAddress(addressValue, fixedSizeBuffer);
+    IGF.setContainerOfUnallocatedAddress(allocInst, fixedSizeBuffer);
     return true;
   }
   
@@ -3436,7 +3533,7 @@ void IRGenSILFunction::emitDebugInfoForAllocStack(AllocStackInst *i,
     auto DbgTy = DebugTypeInfo(Decl, RealType, type, Unwrap);
     StringRef Name = getVarName(i);
     if (auto DS = i->getDebugScope())
-      emitDebugVariableDeclaration(addr, DbgTy, SILTy, DS, Name,
+      emitDebugVariableDeclaration(addr, DbgTy, SILTy, DS, Decl, Name,
                                    i->getVarInfo().ArgNo);
   }
 }
@@ -3456,10 +3553,7 @@ void IRGenSILFunction::visitAllocStackInst(swift::AllocStackInst *i) {
   // If a dynamic alloc_stack is immediately initialized by a copy_addr
   // operation, we can combine the allocation and initialization using an
   // optimized value witness.
-  if (tryDeferFixedSizeBufferInitialization(*this, i, type,
-                                            i,
-                                            Address(),
-                                            dbgname))
+  if (tryDeferFixedSizeBufferInitialization(*this, i, type, Address(), dbgname))
     return;
 
   auto addr = type.allocateStack(*this,
@@ -3608,8 +3702,8 @@ void IRGenSILFunction::visitAllocBoxInst(swift::AllocBoxInst *i) {
     DebugTypeInfo DbgTy(Decl, i->getElementType().getSwiftType(), type, false);
     IGM.DebugInfo->emitVariableDeclaration(
         Builder,
-          emitShadowCopy(boxWithAddr.getAddress(), i->getDebugScope(), Name, 0),
-        DbgTy, i->getDebugScope(), Name, 0,
+        emitShadowCopy(boxWithAddr.getAddress(), i->getDebugScope(), Name, 0),
+        DbgTy, i->getDebugScope(), Decl, Name, 0,
         DbgTy.isImplicitlyIndirect() ? DirectValue : IndirectValue);
   }
 }
@@ -3666,6 +3760,7 @@ void IRGenSILFunction::visitAddressToPointerInst(swift::AddressToPointerInst *i)
   setLoweredExplosion(i, to);
 }
 
+// Ignores the isStrict flag because Swift TBAA is not lowered into LLVM IR.
 void IRGenSILFunction::visitPointerToAddressInst(swift::PointerToAddressInst *i)
 {
   Explosion from = getLoweredExplosion(i->getOperand());
@@ -4257,7 +4352,7 @@ void IRGenSILFunction::visitInitExistentialAddrInst(swift::InitExistentialAddrIn
   auto &srcTI = getTypeInfo(i->getLoweredConcreteType());
 
   // See if we can defer initialization of the buffer to a copy_addr into it.
-  if (tryDeferFixedSizeBufferInitialization(*this, i, srcTI, i, buffer, ""))
+  if (tryDeferFixedSizeBufferInitialization(*this, i, srcTI, buffer, ""))
     return;
   
   // Allocate in the destination fixed-size buffer.
@@ -4460,54 +4555,43 @@ void IRGenSILFunction::setAllocatedAddressForBuffer(SILValue v,
 
 void IRGenSILFunction::visitCopyAddrInst(swift::CopyAddrInst *i) {
   SILType addrTy = i->getSrc()->getType();
+  const TypeInfo &addrTI = getTypeInfo(addrTy);
   Address src = getLoweredAddress(i->getSrc());
-  Address dest;
-  bool isFixedBufferInitialization;
   // See whether we have a deferred fixed-size buffer initialization.
   auto &loweredDest = getLoweredValue(i->getDest());
   if (loweredDest.isUnallocatedAddressInBuffer()) {
-    isFixedBufferInitialization = true;
-    dest = loweredDest.getContainerOfAddress();
+    assert(i->isInitializationOfDest()
+           && "need to initialize an unallocated buffer");
+    Address cont = loweredDest.getContainerOfAddress();
+    if (i->isTakeOfSrc()) {
+      Address addr = addrTI.initializeBufferWithTake(*this, cont, src, addrTy);
+      setAllocatedAddressForBuffer(i->getDest(), addr);
+    } else {
+      Address addr = addrTI.initializeBufferWithCopy(*this, cont, src, addrTy);
+      setAllocatedAddressForBuffer(i->getDest(), addr);
+    }
   } else {
-    isFixedBufferInitialization = false;
-    dest = loweredDest.getAddress();
-  }
-  
-  const TypeInfo &addrTI = getTypeInfo(addrTy);
-
-  unsigned takeAndOrInitialize =
-    (i->isTakeOfSrc() << 1U) | i->isInitializationOfDest();
-  static const unsigned COPY = 0, TAKE = 2, ASSIGN = 0, INITIALIZE = 1;
-  
-  switch (takeAndOrInitialize) {
-  case ASSIGN | COPY:
-    assert(!isFixedBufferInitialization
-           && "can't assign into an unallocated buffer");
-    addrTI.assignWithCopy(*this, dest, src, addrTy);
-    break;
-  case INITIALIZE | COPY:
-    if (isFixedBufferInitialization) {
-      Address addr = addrTI.initializeBufferWithCopy(*this, dest, src, addrTy);
-      setAllocatedAddressForBuffer(i->getDest(), addr);
-    } else
-      addrTI.initializeWithCopy(*this, dest, src, addrTy);
-    break;
-  case ASSIGN | TAKE:
-    assert(!isFixedBufferInitialization
-           && "can't assign into an unallocated buffer");
-    addrTI.assignWithTake(*this, dest, src, addrTy);
-    break;
-  case INITIALIZE | TAKE:
-    if (isFixedBufferInitialization) {
-      Address addr = addrTI.initializeBufferWithTake(*this, dest, src, addrTy);
-      setAllocatedAddressForBuffer(i->getDest(), addr);
-    } else
-      addrTI.initializeWithTake(*this, dest, src, addrTy);
-    break;
-  default:
-    llvm_unreachable("unexpected take/initialize attribute combination?!");
+    Address dest = loweredDest.getAddress();
+    
+    if (i->isInitializationOfDest()) {
+      if (i->isTakeOfSrc()) {
+        addrTI.initializeWithTake(*this, dest, src, addrTy);
+      } else {
+        addrTI.initializeWithCopy(*this, dest, src, addrTy);
+      }
+    } else {
+      if (i->isTakeOfSrc()) {
+        addrTI.assignWithTake(*this, dest, src, addrTy);
+      } else {
+        addrTI.assignWithCopy(*this, dest, src, addrTy);
+      }
+    }
   }
 }
+
+// This is a no-op because we do not lower Swift TBAA info to LLVM IR, and it
+// does not produce any values.
+void IRGenSILFunction::visitBindMemoryInst(swift::BindMemoryInst *) {}
 
 static DeallocStackInst *
 findPairedDeallocStackForDestroyAddr(DestroyAddrInst *destroyAddr) {
@@ -4567,19 +4651,21 @@ void IRGenSILFunction::visitCondFailInst(swift::CondFailInst *i) {
   Builder.CreateCondBr(cond, failBB, contBB);
   Builder.emitBlock(failBB);
 
-  // Emit unique side-effecting inline asm calls in order to eliminate
-  // the possibility that an LLVM optimization or code generation pass
-  // will merge these blocks back together again. We emit an empty asm
-  // string with the side-effect flag set, and with a unique integer
-  // argument for each cond_fail we see in the function.
-  llvm::IntegerType *asmArgTy = IGM.Int32Ty;
-  llvm::Type *argTys = { asmArgTy };
-  llvm::FunctionType *asmFnTy =
-    llvm::FunctionType::get(IGM.VoidTy, argTys, false /* = isVarArg */);
-  llvm::InlineAsm *inlineAsm =
-    llvm::InlineAsm::get(asmFnTy, "", "n", true /* = SideEffects */);
-  Builder.CreateCall(inlineAsm,
-                     llvm::ConstantInt::get(asmArgTy, NumCondFails++));
+  if (IGM.IRGen.Opts.Optimize) {
+    // Emit unique side-effecting inline asm calls in order to eliminate
+    // the possibility that an LLVM optimization or code generation pass
+    // will merge these blocks back together again. We emit an empty asm
+    // string with the side-effect flag set, and with a unique integer
+    // argument for each cond_fail we see in the function.
+    llvm::IntegerType *asmArgTy = IGM.Int32Ty;
+    llvm::Type *argTys = { asmArgTy };
+    llvm::FunctionType *asmFnTy =
+      llvm::FunctionType::get(IGM.VoidTy, argTys, false /* = isVarArg */);
+    llvm::InlineAsm *inlineAsm =
+      llvm::InlineAsm::get(asmFnTy, "", "n", true /* = SideEffects */);
+    Builder.CreateCall(inlineAsm,
+                       llvm::ConstantInt::get(asmArgTy, NumCondFails++));
+  }
 
   // Emit the trap instruction.
   llvm::Function *trapIntrinsic =

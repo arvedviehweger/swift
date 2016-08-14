@@ -116,8 +116,8 @@ class StdlibDeploymentTarget(object):
         "armv6",
         "armv7",
         "aarch64",
-        "ppc64",
-        "ppc64le",
+        "powerpc64",
+        "powerpc64le",
         "s390x"])
 
     FreeBSD = Platform("freebsd", archs=["x86_64"])
@@ -163,9 +163,9 @@ class StdlibDeploymentTarget(object):
             elif machine == 'aarch64':
                 return StdlibDeploymentTarget.Linux.aarch64
             elif machine == 'ppc64':
-                return StdlibDeploymentTarget.Linux.ppc64
+                return StdlibDeploymentTarget.Linux.powerpc64
             elif machine == 'ppc64le':
-                return StdlibDeploymentTarget.Linux.ppc64le
+                return StdlibDeploymentTarget.Linux.powerpc64le
             elif machine == 's390x':
                 return StdlibDeploymentTarget.Linux.s390x
 
@@ -175,7 +175,7 @@ class StdlibDeploymentTarget(object):
 
         elif system == 'FreeBSD':
             if machine == 'amd64':
-                return StdlibDeploymentTarget.FreeBSD.amd64
+                return StdlibDeploymentTarget.FreeBSD.x86_64
 
         elif system == 'CYGWIN_NT-10.0':
             if machine == 'x86_64':

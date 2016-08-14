@@ -826,23 +826,17 @@ void ArchetypeBuilder::PotentialArchetype::dump(llvm::raw_ostream &Out,
   if (!ConformsTo.empty()) {
     Out << " : ";
 
-    if (ConformsTo.size() != 1)
-      Out << "protocol<";
-
     bool First = true;
     for (const auto &ProtoAndSource : ConformsTo) {
       if (First)
         First = false;
       else
-        Out << ", ";
+        Out << " & ";
 
       Out << ProtoAndSource.first->getName().str() << " [";
       ProtoAndSource.second.dump(Out, SrcMgr);
       Out << "]";
     }
-
-    if (ConformsTo.size() != 1)
-      Out << ">";
   }
 
   if (Representative != this) {
@@ -2020,13 +2014,7 @@ void ArchetypeBuilder::dump(llvm::raw_ostream &out) {
 
 Type ArchetypeBuilder::mapTypeIntoContext(const DeclContext *dc, Type type,
                                           LazyResolver *resolver) {
-  // If the type is not dependent, there's nothing to map.
-  if (!type->hasTypeParameter())
-    return type;
-
   auto genericParams = dc->getGenericParamsOfContext();
-  assert(genericParams && "Missing generic parameters for dependent context");
-  
   return mapTypeIntoContext(dc->getParentModule(), genericParams, type,
                             resolver);
 }
@@ -2035,13 +2023,15 @@ Type ArchetypeBuilder::mapTypeIntoContext(Module *M,
                                           GenericParamList *genericParams,
                                           Type type,
                                           LazyResolver *resolver) {
-  // If the type is not dependent, or we have no generic params, there's nothing
-  // to map.
-  if (!genericParams || !type->hasTypeParameter())
+  auto canType = type->getCanonicalType();
+  assert(!canType->hasArchetype() && "already have a contextual type");
+  if (!canType->hasTypeParameter())
     return type;
 
+  assert(genericParams && "dependent type in non-generic context");
+
   unsigned genericParamsDepth = genericParams->getDepth();
-  return type.transform([&](Type type) -> Type {
+  type = type.transform([&](Type type) -> Type {
     // Map a generic parameter type to its archetype.
     if (auto gpType = type->getAs<GenericTypeParamType>()) {
       auto index = gpType->getIndex();
@@ -2064,7 +2054,7 @@ Type ArchetypeBuilder::mapTypeIntoContext(Module *M,
       if (!myGenericParams->getAllArchetypes().empty())
         return myGenericParams->getPrimaryArchetypes()[index];
 
-      // During type-checking, we may try to mapTypeInContext before
+      // During type-checking, we may try to mapTypeIntoContext before
       // AllArchetypes has been built, so fall back to the generic params.
       return myGenericParams->getParams()[index]->getArchetype();
     }
@@ -2078,6 +2068,9 @@ Type ArchetypeBuilder::mapTypeIntoContext(Module *M,
 
     return type;
   });
+
+  assert(!type->hasTypeParameter() && "not fully substituted");
+  return type;
 }
 
 Type
@@ -2089,9 +2082,12 @@ ArchetypeBuilder::mapTypeOutOfContext(const DeclContext *dc, Type type) {
 Type ArchetypeBuilder::mapTypeOutOfContext(ModuleDecl *M,
                                            GenericParamList *genericParams,
                                            Type type) {
-  // If the context is non-generic, we're done.
-  if (!genericParams)
+  auto canType = type->getCanonicalType();
+  assert(!canType->hasTypeParameter() && "already have an interface type");
+  if (!canType->hasArchetype())
     return type;
+
+  assert(genericParams && "dependent type in non-generic context");
 
   // Capture the archetype -> interface type mapping.
   TypeSubstitutionMap subs;
@@ -2102,7 +2098,10 @@ Type ArchetypeBuilder::mapTypeOutOfContext(ModuleDecl *M,
     }
   }
 
-  return type.subst(M, subs, SubstFlags::AllowLoweredTypes);
+  type = type.subst(M, subs, SubstFlags::AllowLoweredTypes);
+
+  assert(!type->hasArchetype() && "not fully substituted");
+  return type;
 }
 
 bool ArchetypeBuilder::addGenericSignature(GenericSignature *sig,
@@ -2157,6 +2156,9 @@ addRequirements(
     ArchetypeBuilder::PotentialArchetype *pa,
     llvm::SmallPtrSet<ArchetypeBuilder::PotentialArchetype *, 16> &knownPAs,
     SmallVectorImpl<Requirement> &requirements) {
+
+  auto &ctx = builder.getASTContext();
+
   // If the potential archetype has been bound away to a concrete type,
   // it needs no requirements.
   if (pa->isConcreteType())
@@ -2181,8 +2183,8 @@ addRequirements(
 
   ProtocolType::canonicalizeProtocols(protocols);
   for (auto proto : protocols) {
-    requirements.push_back(Requirement(RequirementKind::Conformance,
-                                       type, proto->getDeclaredType()));
+    requirements.push_back(Requirement(RequirementKind::Conformance, type,
+                                       ProtocolType::get(proto, ctx)));
   }
 }
 

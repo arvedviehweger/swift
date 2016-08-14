@@ -73,18 +73,33 @@ def type_shell_split(string):
 _register(type, 'shell_split', type_shell_split)
 
 
+class CompilerVersion(object):
+    """A typed representation of a compiler version."""
+
+    def __init__(self, string_representation, components):
+        self.string_representation = string_representation
+        self.components = components
+
+    def __str__(self):
+        return self.string_representation
+
+
 def type_clang_compiler_version(string):
     """
     Parse version string and split into a tuple of strings
     (major, minor, patch)
 
-    Support only "MAJOR.MINOR.PATCH" format.
+    Supports "MAJOR.MINOR.PATCH" and "MAJOR.MINOR.PATCH.PATCH" formats.
     """
-    m = re.match(r'^([0-9]+)\.([0-9]+)\.([0-9]+)$', string)
+    m = re.match(r'^([0-9]+)\.([0-9]+)\.([0-9]+)(\.([0-9]+))?$', string)
     if m is not None:
-        return m.group(1, 2, 3)
+        return CompilerVersion(
+            string_representation=string,
+            components=m.group(1, 2, 3, 5))
     raise argparse.ArgumentTypeError(
-        "%r is invalid version value. must be 'MAJOR.MINOR.PATCH'" % string)
+        "%r is an invalid version value, "
+        "must be 'MAJOR.MINOR.PATCH' or "
+        "'MAJOR.MINOR.PATCH.PATCH'" % string)
 
 _register(type, 'clang_compiler_version', type_clang_compiler_version)
 
@@ -141,3 +156,26 @@ class _ConcatAction(argparse.Action):
         setattr(namespace, self.dest, val)
 
 _register(action, 'concat', _ConcatAction)
+
+
+class _OptionalBoolAction(argparse.Action):
+    def __init__(self,
+                 option_strings,
+                 dest,
+                 default=False,
+                 metavar="BOOL",
+                 help=None):
+        super(_OptionalBoolAction, self).__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            metavar=metavar,
+            nargs="?",
+            type=type.bool,
+            help=help,
+            const=True)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+
+_register(action, 'optional_bool', _OptionalBoolAction)

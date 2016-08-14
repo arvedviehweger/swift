@@ -159,11 +159,11 @@ internal struct RemoveLastNTest {
   }
 }
 
-internal struct RemoveSubrangeTest {
-  let collection: [OpaqueValue<Int>]
-  let rangeSelection: RangeSelection
-  let expected: [Int]
-  let loc: SourceLoc
+public struct RemoveSubrangeTest {
+  public let collection: [OpaqueValue<Int>]
+  public let rangeSelection: RangeSelection
+  public let expected: [Int]
+  public let loc: SourceLoc
 
   internal init(
     collection: [Int], rangeSelection: RangeSelection, expected: [Int],
@@ -394,6 +394,48 @@ public let replaceRangeTests: [ReplaceSubrangeTest] = [
     closedExpected: [1010, 8080, 9090]),
 ]
 
+public let removeRangeTests: [RemoveSubrangeTest] = [
+  RemoveSubrangeTest(
+    collection: [],
+    rangeSelection: .emptyRange,
+    expected: []),
+
+  RemoveSubrangeTest(
+    collection: [1010],
+    rangeSelection: .middle,
+    expected: []),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040],
+    rangeSelection: .leftHalf,
+    expected: [3030, 4040]),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040],
+    rangeSelection: .rightHalf,
+    expected: [1010, 2020]),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040, 5050],
+    rangeSelection: .middle,
+    expected: [1010, 5050]),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040, 5050, 6060],
+    rangeSelection: .leftHalf,
+    expected: [4040, 5050, 6060]),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040, 5050, 6060],
+    rangeSelection: .rightHalf,
+    expected: [1010, 2020, 3030]),
+
+  RemoveSubrangeTest(
+    collection: [1010, 2020, 3030, 4040, 5050, 6060],
+    rangeSelection: .middle,
+    expected: [1010, 6060]),
+]
+
 extension TestSuite {
   /// Adds a set of tests for `RangeReplaceableCollection`.
   ///
@@ -408,12 +450,12 @@ extension TestSuite {
     CollectionWithEquatableElement : RangeReplaceableCollection
   >(
     _ testNamePrefix: String = "",
-    makeCollection: ([C.Iterator.Element]) -> C,
-    wrapValue: (OpaqueValue<Int>) -> C.Iterator.Element,
-    extractValue: (C.Iterator.Element) -> OpaqueValue<Int>,
+    makeCollection: @escaping ([C.Iterator.Element]) -> C,
+    wrapValue: @escaping (OpaqueValue<Int>) -> C.Iterator.Element,
+    extractValue: @escaping (C.Iterator.Element) -> OpaqueValue<Int>,
 
-    makeCollectionOfEquatable: ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
-    wrapValueIntoEquatable: (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
+    makeCollectionOfEquatable: @escaping ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
+    wrapValueIntoEquatable: @escaping (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
     extractValueFromEquatable: ((CollectionWithEquatableElement.Iterator.Element) -> MinimalEquatableValue),
 
     resiliencyChecks: CollectionMisuseResiliencyChecks = .all,
@@ -433,10 +475,11 @@ extension TestSuite {
 
     var testNamePrefix = testNamePrefix
 
-    if checksAdded.contains(#function) {
+    if !checksAdded.insert(
+        "\(testNamePrefix).\(C.self).\(#function)"
+      ).inserted {
       return
     }
-    checksAdded.insert(#function)
 
     addCollectionTests(
       testNamePrefix,
@@ -455,7 +498,7 @@ extension TestSuite {
       return makeCollection(elements.map(wrapValue))
     }
 
-    testNamePrefix += String(C.Type.self)
+    testNamePrefix += String(describing: C.Type.self)
 
 //===----------------------------------------------------------------------===//
 // init()
@@ -808,52 +851,22 @@ self.test("\(testNamePrefix).removeFirst(n: Int)/removeTooMany/semantics") {
 // removeSubrange()
 //===----------------------------------------------------------------------===//
 
-self.test("\(testNamePrefix).removeSubrange()/semantics") {
-  let tests: [RemoveSubrangeTest] = [
-    RemoveSubrangeTest(
-      collection: [],
-      rangeSelection: .emptyRange,
-      expected: []),
-
-    RemoveSubrangeTest(
-      collection: [1010],
-      rangeSelection: .middle,
-      expected: []),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040],
-      rangeSelection: .leftHalf,
-      expected: [3030, 4040]),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040],
-      rangeSelection: .rightHalf,
-      expected: [1010, 2020]),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040, 5050],
-      rangeSelection: .middle,
-      expected: [1010, 5050]),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040, 5050, 6060],
-      rangeSelection: .leftHalf,
-      expected: [4040, 5050, 6060]),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040, 5050, 6060],
-      rangeSelection: .rightHalf,
-      expected: [1010, 2020, 3030]),
-
-    RemoveSubrangeTest(
-      collection: [1010, 2020, 3030, 4040, 5050, 6060],
-      rangeSelection: .middle,
-      expected: [1010, 6060]),
-  ]
-
-  for test in tests {
+self.test("\(testNamePrefix).removeSubrange()/range/semantics") {
+  for test in removeRangeTests {
     var c = makeWrappedCollection(test.collection)
     let rangeToRemove = test.rangeSelection.range(in: c)
+    c.removeSubrange(rangeToRemove)
+    expectEqualSequence(
+      test.expected,
+      c.map { extractValue($0).value },
+      stackTrace: SourceLocStack().with(test.loc))
+  }
+}
+
+self.test("\(testNamePrefix).replaceSubrange()/closedRange/semantics") {
+  for test in removeRangeTests.filter({ !$0.rangeSelection.isEmpty }) {
+    var c = makeWrappedCollection(test.collection)
+    let rangeToRemove = test.rangeSelection.closedRange(in: c)
     c.removeSubrange(rangeToRemove)
     expectEqualSequence(
       test.expected,
@@ -1145,22 +1158,22 @@ self.test("\(testNamePrefix).OperatorPlus") {
   } // addRangeReplaceableCollectionTests
 
   public func addRangeReplaceableBidirectionalCollectionTests<
-    C : protocol<BidirectionalCollection, RangeReplaceableCollection>,
-    CollectionWithEquatableElement : protocol<BidirectionalCollection, RangeReplaceableCollection>
+    C : BidirectionalCollection & RangeReplaceableCollection,
+    CollectionWithEquatableElement : BidirectionalCollection & RangeReplaceableCollection
   >(
     _ testNamePrefix: String = "",
-    makeCollection: ([C.Iterator.Element]) -> C,
-    wrapValue: (OpaqueValue<Int>) -> C.Iterator.Element,
-    extractValue: (C.Iterator.Element) -> OpaqueValue<Int>,
+    makeCollection: @escaping ([C.Iterator.Element]) -> C,
+    wrapValue: @escaping (OpaqueValue<Int>) -> C.Iterator.Element,
+    extractValue: @escaping (C.Iterator.Element) -> OpaqueValue<Int>,
 
-    makeCollectionOfEquatable: ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
-    wrapValueIntoEquatable: (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
+    makeCollectionOfEquatable: @escaping ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
+    wrapValueIntoEquatable: @escaping (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
     extractValueFromEquatable: ((CollectionWithEquatableElement.Iterator.Element) -> MinimalEquatableValue),
 
     resiliencyChecks: CollectionMisuseResiliencyChecks = .all,
     outOfBoundsIndexOffset: Int = 1
   ) where
-    C.SubSequence : protocol<BidirectionalCollection, RangeReplaceableCollection>,
+    C.SubSequence : BidirectionalCollection & RangeReplaceableCollection,
     C.SubSequence.Iterator.Element == C.Iterator.Element,
     C.SubSequence.Index == C.Index,
     C.SubSequence.Indices.Iterator.Element == C.Index,
@@ -1173,10 +1186,11 @@ self.test("\(testNamePrefix).OperatorPlus") {
 
     var testNamePrefix = testNamePrefix
 
-    if checksAdded.contains(#function) {
+    if !checksAdded.insert(
+        "\(testNamePrefix).\(C.self).\(#function)"
+      ).inserted {
       return
     }
-    checksAdded.insert(#function)
 
     addRangeReplaceableCollectionTests(
       testNamePrefix,
@@ -1206,7 +1220,7 @@ self.test("\(testNamePrefix).OperatorPlus") {
       return makeCollection(elements.map(wrapValue))
     }
 
-    testNamePrefix += String(C.Type.self)
+    testNamePrefix += String(describing: C.Type.self)
 
 //===----------------------------------------------------------------------===//
 // removeLast()
@@ -1273,22 +1287,22 @@ self.test("\(testNamePrefix).removeLast(n: Int)/whereIndexIsBidirectional/remove
   } // addRangeReplaceableBidirectionalCollectionTests
 
   public func addRangeReplaceableRandomAccessCollectionTests<
-    C : protocol<RandomAccessCollection, RangeReplaceableCollection>,
-    CollectionWithEquatableElement : protocol<RandomAccessCollection, RangeReplaceableCollection>
+    C : RandomAccessCollection & RangeReplaceableCollection,
+    CollectionWithEquatableElement : RandomAccessCollection & RangeReplaceableCollection
   >(
     _ testNamePrefix: String = "",
-    makeCollection: ([C.Iterator.Element]) -> C,
-    wrapValue: (OpaqueValue<Int>) -> C.Iterator.Element,
-    extractValue: (C.Iterator.Element) -> OpaqueValue<Int>,
+    makeCollection: @escaping ([C.Iterator.Element]) -> C,
+    wrapValue: @escaping (OpaqueValue<Int>) -> C.Iterator.Element,
+    extractValue: @escaping (C.Iterator.Element) -> OpaqueValue<Int>,
 
-    makeCollectionOfEquatable: ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
-    wrapValueIntoEquatable: (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
+    makeCollectionOfEquatable: @escaping ([CollectionWithEquatableElement.Iterator.Element]) -> CollectionWithEquatableElement,
+    wrapValueIntoEquatable: @escaping (MinimalEquatableValue) -> CollectionWithEquatableElement.Iterator.Element,
     extractValueFromEquatable: ((CollectionWithEquatableElement.Iterator.Element) -> MinimalEquatableValue),
 
     resiliencyChecks: CollectionMisuseResiliencyChecks = .all,
     outOfBoundsIndexOffset: Int = 1
   ) where
-    C.SubSequence : protocol<RandomAccessCollection, RangeReplaceableCollection>,
+    C.SubSequence : RandomAccessCollection & RangeReplaceableCollection,
     C.SubSequence.Iterator.Element == C.Iterator.Element,
     C.SubSequence.Index == C.Index,
     C.SubSequence.Indices.Iterator.Element == C.Index,
@@ -1301,10 +1315,11 @@ self.test("\(testNamePrefix).removeLast(n: Int)/whereIndexIsBidirectional/remove
 
     var testNamePrefix = testNamePrefix
 
-    if checksAdded.contains(#function) {
+    if !checksAdded.insert(
+        "\(testNamePrefix).\(C.self).\(#function)"
+      ).inserted {
       return
     }
-    checksAdded.insert(#function)
 
     addRangeReplaceableBidirectionalCollectionTests(
       testNamePrefix,
@@ -1328,7 +1343,7 @@ self.test("\(testNamePrefix).removeLast(n: Int)/whereIndexIsBidirectional/remove
       resiliencyChecks: resiliencyChecks,
       outOfBoundsIndexOffset: outOfBoundsIndexOffset)
 
-    testNamePrefix += String(C.Type.self)
+    testNamePrefix += String(describing: C.Type.self)
 
     // No extra checks for collections with random access traversal so far.
   } // addRangeReplaceableRandomAccessCollectionTests

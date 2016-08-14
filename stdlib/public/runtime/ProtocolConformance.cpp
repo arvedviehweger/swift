@@ -30,6 +30,8 @@
 #endif
 
 #if defined(_MSC_VER)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -63,7 +65,7 @@ template<> void ProtocolConformanceRecord::dump() const {
       printf("%s direct type ",
              kind == TypeMetadataRecordKind::UniqueDirectType
              ? "unique" : "nonunique");
-      if (auto ntd = getDirectType()->getNominalTypeDescriptor()) {
+      if (auto &ntd = getDirectType()->getNominalTypeDescriptor()) {
         printf("%s", ntd->Name.get());
       } else {
         printf("<structural type>");
