@@ -44,6 +44,7 @@ class TypeChecker;
 
 namespace constraints {
   enum class ConstraintKind : char;
+  enum class SolutionKind : char;
   class ConstraintSystem;
   class Solution;
 }
@@ -730,8 +731,9 @@ public:
   void checkUnsupportedProtocolType(Stmt *stmt);
 
   /// Expose TypeChecker's handling of GenericParamList to SIL parsing.
-  GenericSignature *handleSILGenericParams(GenericParamList *genericParams,
-                                           DeclContext *DC);
+  std::pair<GenericSignature *, GenericEnvironment *>
+  handleSILGenericParams(GenericParamList *genericParams,
+                         DeclContext *DC);
 
   /// \brief Resolves a TypeRepr to a type.
   ///
@@ -995,7 +997,7 @@ public:
   bool isProtocolExtensionUsable(DeclContext *dc, Type type,
                                  ExtensionDecl *protocolExtension) override;
 
-  void markInvalidGenericSignature(ValueDecl *VD);
+  GenericEnvironment *markInvalidGenericSignature(DeclContext *dc);
 
   /// Configure the interface type of a function declaration.
   void configureInterfaceType(AbstractFunctionDecl *func);
@@ -1043,9 +1045,10 @@ public:
 
   /// Finalize the given generic parameter list, assigning archetypes to
   /// the generic parameters.
-  void finalizeGenericParamList(ArchetypeBuilder &builder,
-                                GenericParamList *genericParams,
-                                DeclContext *dc);
+  GenericEnvironment *finalizeGenericParamList(ArchetypeBuilder &builder,
+                                               GenericParamList *genericParams,
+                                               GenericSignature *genericSig,
+                                               DeclContext *dc);
 
   /// Validate the signature of a generic type.
   ///
@@ -1059,8 +1062,8 @@ public:
   bool checkGenericParamList(ArchetypeBuilder *builder,
                              GenericParamList *genericParams,
                              GenericSignature *parentSig,
-                             bool adoptArchetypes = true,
-                             GenericTypeResolver *resolver = nullptr);
+                             GenericEnvironment *parentEnv,
+                             GenericTypeResolver *resolver);
 
   /// Check the given set of generic arguments against the requirements in a
   /// generic signature.
@@ -1329,18 +1332,6 @@ public:
                                        std::function<bool(Type)> convertToType,
                                        bool suppressDiagnostics);
 
-  /// Retrieves the Objective-C type to which the given value type is
-  /// bridged.
-  ///
-  /// \param dc The declaration context from which we will look for
-  /// bridging.
-  ///
-  /// \param type The value type being queried, e.g., String.
-  ///
-  /// \returns the class type to which the given type is bridged, or null if it
-  /// is not bridged.
-  Type getBridgedToObjC(const DeclContext *dc, Type type);
-
   /// Find the Objective-C class that bridges between a value of the given
   /// dynamic type and the given value type.
   ///
@@ -1404,7 +1395,7 @@ public:
   /// contextual type.
   ///
   /// \returns true if an error occurred, false otherwise.
-  bool coerceParameterListToType(ParameterList *P, DeclContext *dc, Type type);
+  bool coerceParameterListToType(ParameterList *P, ClosureExpr *CE, AnyFunctionType *FN);
 
   
   /// Type-check an initialized variable pattern declaration.
@@ -1601,14 +1592,14 @@ public:
   /// Find the @objc requirement that are witnessed by the given
   /// declaration.
   ///
-  /// \param onlyFirstRequirement If true, only returns the first such
-  /// requirement, rather than all of them.
+  /// \param anySingleRequirement If true, returns at most a single requirement,
+  /// which might be any of the requirements that match.
   ///
   /// \returns the set of requirements to which the given witness is a
   /// witness.
   llvm::TinyPtrVector<ValueDecl *> findWitnessedObjCRequirements(
                                      const ValueDecl *witness,
-                                     bool onlyFirstRequirement);
+                                     bool anySingleRequirement = false);
 
   /// Mark any _ObjectiveCBridgeable conformances in the given type as "used".
   void useObjectiveCBridgeableConformances(DeclContext *dc, Type type);
@@ -1981,19 +1972,6 @@ public:
 
   /// Attempt to omit needless words from the name of the given declaration.
   Optional<Identifier> omitNeedlessWords(VarDecl *var);
-
-  /// Check for needless words in the name of the given function/constructor.
-  void checkOmitNeedlessWords(AbstractFunctionDecl *afd);
-
-  /// Check for needless words in the name of the given variable.
-  void checkOmitNeedlessWords(VarDecl *var);
-
-  /// Check for needless words in the name of the function/constructor being
-  /// called.
-  void checkOmitNeedlessWords(ApplyExpr *apply);
-
-  /// Check for needless words in the member reference.
-  void checkOmitNeedlessWords(MemberRefExpr *memberRef);
 
   /// Check for a typo correction.
   void performTypoCorrection(DeclContext *DC,
