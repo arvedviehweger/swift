@@ -415,7 +415,7 @@ static bool isPointerToVoid(ASTContext &Ctx, Type Ty, bool &IsMutable) {
 Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
                                         SourceLoc loc, DeclContext *dc,
                                         GenericIdentTypeRepr *generic,
-                                        bool isGenericSignature,
+                                        TypeResolutionOptions options,
                                         GenericTypeResolver *resolver) {
 
   if (type->is<ErrorType>()) {
@@ -473,10 +473,26 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
     return nullptr;
   }
 
+  // In SIL mode, Optional<T> interprets T as a SIL type.
+  if (options.contains(TR_SILType)) {
+    if (auto nominal = dyn_cast<NominalTypeDecl>(decl)) {
+      if (nominal->classifyAsOptionalType()) {
+        // Validate the generic argument.
+        TypeLoc arg = genericArgs[0];
+        if (validateType(arg, dc, withoutContext(options, true), resolver))
+          return nullptr;
+
+        Type objectType = arg.getType();
+        return BoundGenericType::get(nominal, /*parent*/ Type(), objectType);
+      }
+    }  
+  }
+
   SmallVector<TypeLoc, 8> args;
   for (auto tyR : genericArgs)
     args.push_back(tyR);
 
+  bool isGenericSignature = options.contains(TR_GenericSignature);
   auto result = applyUnboundGenericArguments(type, genericDecl, loc, dc, args,
                                              isGenericSignature, resolver);
   bool isMutablePointer;
@@ -591,11 +607,11 @@ static Type applyGenericTypeReprArgs(TypeChecker &TC, Type type,
                                      SourceLoc loc,
                                      DeclContext *dc,
                                      GenericIdentTypeRepr *generic,
-                                     bool isGenericSignature,
+                                     TypeResolutionOptions options,
                                      GenericTypeResolver *resolver) {
 
   Type ty = TC.applyGenericArguments(type, decl, loc, dc, generic,
-                                     isGenericSignature, resolver);
+                                     options, resolver);
   if (!ty)
     return ErrorType::get(TC.Context);
   return ty;
@@ -608,41 +624,9 @@ static void diagnoseUnboundGenericType(TypeChecker &tc, Type ty,SourceLoc loc) {
     InFlightDiagnostic diag = tc.diagnose(loc,
         diag::generic_type_requires_arguments, ty);
     if (auto *genericD = unbound->getDecl()) {
-
-      // Tries to infer the type arguments to pass.
-      // Currently it only works if all the generic arguments have a super type,
-      // or it requires a class, in which case it infers 'AnyObject'.
-      auto inferGenericArgs = [](GenericTypeDecl *genericD)->std::string {
-        GenericParamList *genParamList = genericD->getGenericParams();
-        if (!genParamList)
-          return std::string();
-        auto params= genParamList->getParams();
-        if (params.empty())
-          return std::string();
-        std::string argsToAdd = "<";
-        for (unsigned i = 0, e = params.size(); i != e; ++i) {
-          auto param = params[i];
-          auto archTy = param->getArchetype();
-          if (!archTy)
-            return std::string();
-          if (auto superTy = archTy->getSuperclass()) {
-            argsToAdd += superTy.getString();
-          } else if (archTy->requiresClass()) {
-            argsToAdd += "AnyObject";
-          } else {
-            return std::string(); // give up.
-          }
-          if (i < e-1)
-            argsToAdd += ", ";
-        }
-        argsToAdd += ">";
-        return argsToAdd;
-      };
-
-      std::string genericArgsToAdd = inferGenericArgs(genericD);
-      if (!genericArgsToAdd.empty()) {
+      SmallString<64> genericArgsToAdd;
+      if (tc.getDefaultGenericArgumentsString(genericArgsToAdd, genericD))
         diag.fixItInsertAfter(loc, genericArgsToAdd);
-      }
     }
   }
   tc.diagnose(unbound->getDecl()->getLoc(), diag::generic_type_declared_here,
@@ -704,8 +688,7 @@ static Type resolveTypeDecl(TypeChecker &TC, TypeDecl *typeDecl, SourceLoc loc,
   if (generic && !options.contains(TR_ResolveStructure)) {
     // Apply the generic arguments to the type.
     type = applyGenericTypeReprArgs(TC, type, typeDecl, loc, dc, generic,
-                                    options.contains(TR_GenericSignature),
-                                    resolver);
+                                    options, resolver);
   }
 
   assert(type);
@@ -1108,7 +1091,7 @@ static Type resolveNestedIdentTypeComponent(
     if (auto genComp = dyn_cast<GenericIdentTypeRepr>(comp)) {
       memberType = applyGenericTypeReprArgs(
           TC, memberType, typeDecl, comp->getIdLoc(), DC, genComp,
-          options.contains(TR_GenericSignature), resolver);
+          options, resolver);
 
       // Propagate failure.
       if (!memberType || memberType->is<ErrorType>()) return memberType;
@@ -1228,7 +1211,7 @@ static Type resolveNestedIdentTypeComponent(
   if (auto genComp = dyn_cast<GenericIdentTypeRepr>(comp))
     memberType = applyGenericTypeReprArgs(
         TC, memberType, member, comp->getIdLoc(), DC, genComp,
-        options.contains(TR_GenericSignature), resolver);
+        options, resolver);
 
   // If we found a reference to an associated type or other member type that
   // was marked invalid, just return ErrorType to silence downstream errors.
@@ -1561,7 +1544,14 @@ bool TypeChecker::validateType(TypeLoc &Loc, DeclContext *DC,
       if (unsatisfiedDependency) return false;
 
       type = ErrorType::get(Context);
+
+      // Diagnose types that are illegal in SIL.
+    } else if (options.contains(TR_SILType) && !type->isLegalSILType()) {
+      diagnose(Loc.getLoc(), diag::illegal_sil_type, type);
+      Loc.setType(ErrorType::get(Context), true);
+      return true;
     }
+
     Loc.setType(type, true);
     return Loc.isError();
   }
@@ -1779,6 +1769,8 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
   bool isFunctionParam =
     options.contains(TR_FunctionInput) ||
     options.contains(TR_ImmediateFunctionInput);
+  bool isVariadicFunctionParam =
+    options.contains(TR_VariadicFunctionInput);
 
   // The type we're working with, in case we want to build it differently
   // based on the attributes we see.
@@ -1959,7 +1951,9 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
     // @autoclosure is only valid on parameters.
     if (!isFunctionParam && attrs.has(TAK_autoclosure)) {
       TC.diagnose(attrs.getLoc(TAK_autoclosure),
-                  diag::attr_only_only_on_parameters, "@autoclosure");
+                  isVariadicFunctionParam
+                      ? diag::attr_not_on_variadic_parameters
+                      : diag::attr_only_on_parameters, "@autoclosure");
       attrs.clearAttribute(TAK_autoclosure);
     }
 
@@ -2010,8 +2004,13 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
           loc.getAdvancedLoc(-1),
           Lexer::getLocForEndOfToken(SM, loc));
 
-        TC.diagnose(loc, diag::escaping_function_type)
+        TC.diagnose(loc, diag::escaping_non_function_parameter)
             .fixItRemove(attrRange);
+
+        // Try to find a helpful note based on how the type is being used
+        if (options.contains(TR_ImmediateOptionalTypeArgument)) {
+          TC.diagnose(repr->getLoc(), diag::escaping_optional_type_argument);
+        }
       }
 
       attrs.clearAttribute(TAK_escaping);
@@ -2288,7 +2287,15 @@ SILParameterInfo TypeResolver::resolveSILParameter(
     type = resolveType(repr, options);
   }
 
-  if (!type) return SILParameterInfo(CanType(), convention);
+  if (!type || type->is<ErrorType>()) {
+    hadError = true;
+
+  // Diagnose types that are illegal in SIL.
+  } else if (!type->isLegalSILType()) {
+    TC.diagnose(repr->getLoc(), diag::illegal_sil_type, type);
+    hadError = true;
+  }
+
   if (hadError) type = ErrorType::get(Context);
   return SILParameterInfo(type->getCanonicalType(), convention);
 }
@@ -2341,6 +2348,12 @@ bool TypeResolver::resolveSingleSILResult(TypeRepr *repr,
   // Propagate type-resolution errors out.
   if (!type || type->is<ErrorType>()) return true;
 
+  // Diagnose types that are illegal in SIL.
+  if (!type->isLegalSILType()) {
+    TC.diagnose(repr->getStartLoc(), diag::illegal_sil_type, type);
+    return false;
+  }
+
   assert(!isErrorResult || convention == ResultConvention::Owned);
   SILResultInfo resolvedResult(type->getCanonicalType(), convention);
 
@@ -2391,7 +2404,11 @@ Type TypeResolver::resolveInOutType(InOutTypeRepr *repr,
   // inout is only valid for function parameters.
   if (!(options & TR_FunctionInput) &&
       !(options & TR_ImmediateFunctionInput)) {
-    TC.diagnose(repr->getInOutLoc(), diag::inout_only_parameter);
+    TC.diagnose(repr->getInOutLoc(),
+                (options & TR_VariadicFunctionInput)
+                    ? diag::attr_not_on_variadic_parameters
+                    : diag::attr_only_on_parameters,
+                "'inout'");
     repr->setInvalid();
     return ErrorType::get(Context);
   }
@@ -2438,6 +2455,8 @@ Type TypeResolver::resolveDictionaryType(DictionaryTypeRepr *repr,
     // Check the requirements on the generic arguments.
     auto unboundTy = dictDecl->getDeclaredType();
     TypeLoc args[2] = { TypeLoc(repr->getKey()), TypeLoc(repr->getValue()) };
+    args[0].setType(keyTy, true);
+    args[1].setType(valueTy, true);
 
     if (!TC.applyUnboundGenericArguments(
             unboundTy, dictDecl, repr->getStartLoc(), DC, args,
@@ -2458,9 +2477,12 @@ Type TypeResolver::resolveDictionaryType(DictionaryTypeRepr *repr,
 
 Type TypeResolver::resolveOptionalType(OptionalTypeRepr *repr,
                                        TypeResolutionOptions options) {
+  auto elementOptions = withoutContext(options, true);
+  elementOptions |= TR_ImmediateOptionalTypeArgument;
+
   // The T in T? is a generic type argument and therefore always an AST type.
   // FIXME: diagnose non-materializability of element type!
-  Type baseTy = resolveType(repr->getBase(), withoutContext(options));
+  Type baseTy = resolveType(repr->getBase(), elementOptions);
   if (!baseTy || baseTy->is<ErrorType>()) return baseTy;
 
   auto optionalTy = TC.getOptionalType(repr->getQuestionLoc(), baseTy);
@@ -2472,9 +2494,12 @@ Type TypeResolver::resolveOptionalType(OptionalTypeRepr *repr,
 Type TypeResolver::resolveImplicitlyUnwrappedOptionalType(
        ImplicitlyUnwrappedOptionalTypeRepr *repr,
        TypeResolutionOptions options) {
+  auto elementOptions = withoutContext(options, true);
+  elementOptions |= TR_ImmediateOptionalTypeArgument;
+
   // The T in T! is a generic type argument and therefore always an AST type.
   // FIXME: diagnose non-materializability of element type!
-  Type baseTy = resolveType(repr->getBase(), withoutContext(options));
+  Type baseTy = resolveType(repr->getBase(), elementOptions);
   if (!baseTy || baseTy->is<ErrorType>()) return baseTy;
 
   auto uncheckedOptionalTy =
@@ -2499,42 +2524,62 @@ Type TypeResolver::resolveTupleType(TupleTypeRepr *repr,
   // default.
   auto elementOptions = options;
   if (!repr->isParenType()) {
-    elementOptions = withoutContext(elementOptions);
+    elementOptions = withoutContext(elementOptions, true);
     if (options & TR_ImmediateFunctionInput)
       elementOptions |= TR_FunctionInput;
   }
-  
-  for (auto tyR : repr->getElements()) {
-    NamedTypeRepr *namedTyR = dyn_cast<NamedTypeRepr>(tyR);
-    if (namedTyR && !(options & TR_ImmediateFunctionInput)) {
-      Type ty = resolveType(namedTyR->getTypeRepr(), elementOptions);
-      if (!ty || ty->is<ErrorType>()) return ty;
 
-      elements.push_back(TupleTypeElt(ty, namedTyR->getName()));
-    } else {
-      // FIXME: Preserve and serialize parameter names in function types, maybe
-      // with a new sugar type.
-      Type ty = resolveType(namedTyR ? namedTyR->getTypeRepr() : tyR,
-                            elementOptions);
-      if (!ty || ty->is<ErrorType>()) return ty;
+  bool complained = false;
 
-      elements.push_back(TupleTypeElt(ty));
-    }
+  // Variadic tuples are not permitted.
+  if (repr->hasEllipsis() &&
+      !(options & TR_ImmediateFunctionInput)) {
+    TC.diagnose(repr->getEllipsisLoc(), diag::tuple_ellipsis);
+    repr->removeEllipsis();
+    complained = true;
   }
 
-  // Tuple representations are limited outside of function inputs.
+  for (auto tyR : repr->getElements()) {
+    NamedTypeRepr *namedTyR = dyn_cast<NamedTypeRepr>(tyR);
+    Type ty;
+    Identifier name;
+    bool variadic = false;
+
+    // If the element has a label, stash the label and get the underlying type.
+    if (namedTyR) {
+      // FIXME: Preserve and serialize parameter names in function types, maybe
+      // with a new sugar type.
+      if (!(options & TR_ImmediateFunctionInput))
+        name = namedTyR->getName();
+
+      tyR = namedTyR->getTypeRepr();
+    }
+
+    // If the element is a variadic parameter, resolve the parameter type as if
+    // it were in non-parameter position, since we want functions to be
+    // @escaping in this case.
+    auto thisElementOptions = elementOptions;
+    if (repr->hasEllipsis() &&
+        elements.size() == repr->getEllipsisIndex()) {
+      thisElementOptions = withoutContext(elementOptions);
+      thisElementOptions |= TR_VariadicFunctionInput;
+      variadic = true;
+    }
+
+    ty = resolveType(tyR, thisElementOptions);
+    if (!ty || ty->is<ErrorType>()) return ty;
+
+    // If the element is a variadic parameter, the underlying type is actually
+    // an ArraySlice of the element type.
+    if (variadic)
+      ty = TC.getArraySliceType(repr->getEllipsisLoc(), ty);
+
+    elements.push_back(TupleTypeElt(ty, name, variadic));
+  }
+
+  // Single-element labeled tuples are not permitted outside of declarations
+  // or SIL, either.
   if (!(options & TR_ImmediateFunctionInput)) {
-    bool complained = false;
-
-    // Variadic tuples are not permitted.
-    if (repr->hasEllipsis()) {
-      TC.diagnose(repr->getEllipsisLoc(), diag::tuple_ellipsis);
-      repr->removeEllipsis();
-      complained = true;
-    } 
-
-    // Single-element labeled tuples are not permitted outside of declarations
-    // or SIL, either.
     if (elements.size() == 1 && elements[0].hasName()
         && !(options & TR_SILType)
         && !(options & TR_EnumCase)) {
@@ -2548,14 +2593,6 @@ Type TypeResolver::resolveTupleType(TupleTypeRepr *repr,
 
       elements[0] = TupleTypeElt(elements[0].getType());
     }
-  }
-
-  if (repr->hasEllipsis()) {
-    auto &element = elements[repr->getEllipsisIndex()];
-    Type baseTy = element.getType();
-    Type fullTy = TC.getArraySliceType(repr->getEllipsisLoc(), baseTy);
-    Identifier name = element.getName();
-    element = TupleTypeElt(fullTy, name, true);
   }
 
   return TupleType::get(elements, Context);

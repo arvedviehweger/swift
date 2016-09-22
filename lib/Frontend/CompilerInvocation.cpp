@@ -765,6 +765,18 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
                           const FrontendOptions &FrontendOpts) {
   using namespace options;
 
+  if (auto A = Args.getLastArg(OPT_swift_version)) {
+    auto vers = version::Version::parseVersionString(
+      A->getValue(), SourceLoc(), &Diags);
+    if (vers.hasValue() &&
+        vers.getValue().isValidEffectiveLanguageVersion()) {
+      Opts.EffectiveLanguageVersion = vers.getValue();
+    } else {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+    }
+  }
+
   Opts.AttachCommentsToDecls |= Args.hasArg(OPT_dump_api_path);
 
   Opts.UseMalloc |= Args.hasArg(OPT_use_malloc);
@@ -916,7 +928,6 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
   }
 
   Opts.InferImportAsMember |= Args.hasArg(OPT_enable_infer_import_as_member);
-  Opts.HonorSwiftNewtypeAttr |= Args.hasArg(OPT_enable_swift_newtype);
   Opts.DumpClangDiagnostics |= Args.hasArg(OPT_dump_clang_diagnostics);
 
   if (Args.hasArg(OPT_embed_bitcode))
@@ -982,7 +993,10 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
                                 DiagnosticEngine &Diags) {
   using namespace options;
 
-  Opts.VerifyDiagnostics |= Args.hasArg(OPT_verify);
+  if (Args.hasArg(OPT_verify))
+    Opts.VerifyMode = DiagnosticOptions::Verify;
+  if (Args.hasArg(OPT_verify_apply_fixes))
+    Opts.VerifyMode = DiagnosticOptions::VerifyAndApplyFixes;
   Opts.SkipDiagnosticPasses |= Args.hasArg(OPT_disable_diagnostic_passes);
   Opts.ShowDiagnosticsAfterFatalError |=
     Args.hasArg(OPT_show_diagnostics_after_fatal);

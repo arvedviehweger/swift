@@ -39,6 +39,7 @@ add_swift_library(swiftAST STATIC
   Stmt.cpp
   SourceEntityWalker.cpp
   Substitution.cpp
+  SubstitutionMap.cpp
   Type.cpp
   TypeJoinMeet.cpp
   TypeRefinementContext.cpp
@@ -71,11 +72,17 @@ add_swift_library(swiftAST STATIC
     clangBasic
 
   LLVM_COMPONENT_DEPENDS
-    bitreader bitwriter irreader debuginfoDWARF
+    bitreader bitwriter coverage irreader debuginfoDWARF
     profiledata instrumentation object objcarcopts mc mcparser
     bitreader bitwriter lto ipo option core support ${LLVM_TARGETS_TO_BUILD}
   )
 
+# intrinsics_gen is the LLVM tablegen target that generates the include files
+# where intrinsics and attributes are declared. swiftAST depends on these
+# headers. When we build swift out of tree, this is not an issue since LLVM must
+# finish building before we build Swift. But when we are in tree, the build
+# system must be made aware of the dependency between swiftAST and
+# intrinsics_gen.
 if(NOT SWIFT_BUILT_STANDALONE)
   get_property(CLANG_TABLEGEN_TARGETS GLOBAL PROPERTY CLANG_TABLEGEN_TARGETS)
   add_dependencies(swiftAST intrinsics_gen ${CLANG_TABLEGEN_TARGETS})

@@ -249,6 +249,7 @@ getAlternativeLiteralTypes(KnownProtocolKind kind) {
   case KnownProtocolKind::ExpressibleByImageLiteral: index = 11; break;
   case KnownProtocolKind::ExpressibleByFileReferenceLiteral: index = 12; break;
   }
+  static_assert(NumAlternativeLiteralTypes == 13, "Wrong # of literal types");
 
   // If we already looked for alternative literal types, return those results.
   if (AlternativeLiteralTypes[index])
@@ -446,10 +447,8 @@ namespace {
         if (implArchetype->hasNestedType(member->getName())) {
           nestedType = implArchetype->getNestedType(member->getName());
           archetype = nestedType.getValue()->getAs<ArchetypeType>();
-        } else if (implArchetype->isSelfDerived()) {
-          archetype = implArchetype;
         }
-                                
+
         ConstraintLocator *locator;
         if (archetype) {
           locator = CS.getConstraintLocator(
@@ -837,7 +836,7 @@ static unsigned getNumRemovedArgumentLabels(ASTContext &ctx, ValueDecl *decl,
     // If this is a curried reference to an instance method, where 'self' is
     // being applied, e.g., "ClassName.instanceMethod(self)", remove the
     // argument labels from the resulting function type. The 'self' parameter is
-    // always unlabled, so this operation is a no-op for the actual application.
+    // always unlabeled, so this operation is a no-op for the actual application.
     return isCurriedInstanceReference ? func->getNumParameterLists() : 1;
 
   case FunctionRefKind::DoubleApply:

@@ -667,6 +667,12 @@ extension Any${Kind} {
       whereSeparator: isSeparator)
   }
 
+  public func _customContainsEquatableElement(
+    _ element: Element
+  ) -> Bool? {
+    return _box.__customContainsEquatableElement(element)
+  }
+
   public func _preprocessingPass<R>(
     _ preprocess: () throws -> R
   ) rethrows -> R? {
@@ -817,7 +823,7 @@ public struct ${Self}<Element>
     where
     C.Iterator.Element == Element,
 
-    // FIXME(compiler limitation): these constraints should be applied to
+    // FIXME(ABI)#101 (Associated Types with where clauses): these constraints should be applied to
     // associated types of Collection.
     C.SubSequence : ${SubProtocol},
     C.SubSequence.Iterator.Element == Element,

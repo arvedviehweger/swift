@@ -34,6 +34,7 @@
 #include "swift/Basic/Dwarf.h"
 #include "swift/Basic/Fallthrough.h"
 #include "swift/Basic/FileSystem.h"
+#include "swift/Basic/LLVMContext.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Basic/Timer.h"
 #include "swift/Frontend/DiagnosticVerifier.h"
@@ -622,7 +623,7 @@ private:
     if (Info.ID == diag::init_not_instance_member.ID)
       return false;
     // Renaming enum cases interacts poorly with the swift migrator by
-    // reverting changes made by the mgirator.
+    // reverting changes made by the migrator.
     if (Info.ID == diag::could_not_find_enum_case.ID)
       return false;
 
@@ -649,7 +650,8 @@ private:
         Info.ID == diag::deprecated_protocol_composition.ID ||
         Info.ID == diag::deprecated_protocol_composition_single.ID ||
         Info.ID == diag::deprecated_any_composition.ID ||
-        Info.ID == diag::deprecated_operator_body.ID)
+        Info.ID == diag::deprecated_operator_body.ID ||
+        Info.ID == diag::unbound_generic_parameter_explicit_fix.ID)
       return true;
 
     return false;
@@ -708,7 +710,7 @@ static bool performCompile(CompilerInstance &Instance,
 
   bool inputIsLLVMIr = Invocation.getInputKind() == InputFileKind::IFK_LLVM_IR;
   if (inputIsLLVMIr) {
-    auto &LLVMContext = llvm::getGlobalContext();
+    auto &LLVMContext = getGlobalLLVMContext();
 
     // Load in bitcode file.
     assert(Invocation.getInputFilenames().size() == 1 &&
@@ -1075,7 +1077,7 @@ static bool performCompile(CompilerInstance &Instance,
 
   // FIXME: We shouldn't need to use the global context here, but
   // something is persisting across calls to performIRGeneration.
-  auto &LLVMContext = llvm::getGlobalContext();
+  auto &LLVMContext = getGlobalLLVMContext();
   if (PrimarySourceFile) {
     performIRGeneration(IRGenOpts, *PrimarySourceFile, SM.get(),
                         opts.getSingleOutputFilename(), LLVMContext);
@@ -1181,9 +1183,7 @@ int swift::performFrontend(ArrayRef<const char *> Args,
 
   // Setting DWARF Version depend on platform
   IRGenOptions &IRGenOpts = Invocation.getIRGenOptions();
-  IRGenOpts.DWARFVersion = swift::GenericDWARFVersion;
-  if (Invocation.getLangOptions().Target.isWindowsCygwinEnvironment())
-    IRGenOpts.DWARFVersion = swift::CygwinDWARFVersion;
+  IRGenOpts.DWARFVersion = swift::DWARFVersion;
 
   // The compiler invocation is now fully configured; notify our observer.
   if (observer) {
@@ -1270,7 +1270,8 @@ int swift::performFrontend(ArrayRef<const char *> Args,
     llvm::EnableStatistics();
   }
 
-  if (Invocation.getDiagnosticOptions().VerifyDiagnostics) {
+  const DiagnosticOptions &diagOpts = Invocation.getDiagnosticOptions();
+  if (diagOpts.VerifyMode != DiagnosticOptions::NoVerify) {
     enableDiagnosticVerifier(Instance.getSourceMgr());
   }
 
@@ -1299,9 +1300,12 @@ int swift::performFrontend(ArrayRef<const char *> Args,
                        Invocation.getFrontendOptions().DumpAPIPath);
   }
 
-  if (Invocation.getDiagnosticOptions().VerifyDiagnostics) {
-    HadError = verifyDiagnostics(Instance.getSourceMgr(),
-                                 Instance.getInputBufferIDs());
+  if (diagOpts.VerifyMode != DiagnosticOptions::NoVerify) {
+    HadError = verifyDiagnostics(
+        Instance.getSourceMgr(),
+        Instance.getInputBufferIDs(),
+        diagOpts.VerifyMode == DiagnosticOptions::VerifyAndApplyFixes);
+
     DiagnosticEngine &diags = Instance.getDiags();
     if (diags.hasFatalErrorOccurred() &&
         !Invocation.getDiagnosticOptions().ShowDiagnosticsAfterFatalError) {

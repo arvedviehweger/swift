@@ -1687,6 +1687,10 @@ public:
   }
   SourceRange getOrigInitRange() const;
   void setInit(Expr *E);
+
+  /// Retrieve the initializer as it was written in the source.
+  Expr *getInitAsWritten() const { return InitCheckedAndRemoved.getPointer(); }
+
   bool isInitializerChecked() const {
     return InitCheckedAndRemoved.getInt().contains(Flags::Checked);
   }
@@ -1698,14 +1702,17 @@ public:
   // Return the first variable initialized by this pattern.
   VarDecl *getAnchoringVarDecl() const;
 
-  // Retrieve the declaration context for the intializer.
+  // Retrieve the declaration context for the initializer.
   DeclContext *getInitContext() const { return InitContext; }
 
   /// Override the initializer context.
   void setInitContext(DeclContext *dc) { InitContext = dc; }
 
   /// Retrieve the source range covered by this pattern binding.
-  SourceRange getSourceRange() const;
+  ///
+  /// \param omitAccessors Whether the computation should omit the accessors
+  /// from the source range.
+  SourceRange getSourceRange(bool omitAccessors = false) const;
 };
 
 /// \brief This decl contains a pattern and optional initializer for a set
@@ -3526,6 +3533,10 @@ public:
   ///
   /// FIXME: protocol extensions will introduce a where clause here as well.
   GenericParamList *createGenericParams(DeclContext *dc);
+
+  /// Create the generic parameters of this protocol if the haven't been
+  /// created yet.
+  void createGenericParamsIfMissing();
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {

@@ -118,7 +118,7 @@ swift::isInstructionTriviallyDead(SILInstruction *I) {
 /// \brief Return true if this is a release instruction and the released value
 /// is a part of a guaranteed parameter.
 bool swift::isIntermediateRelease(SILInstruction *I,
-                                  ConsumedArgToEpilogueReleaseMatcher &ERM) {
+                                  EpilogueARCFunctionInfo *EAFI) {
   // Check whether this is a release instruction.
   if (!isa<StrongReleaseInst>(I) && !isa<ReleaseValueInst>(I))
     return false;
@@ -136,8 +136,10 @@ bool swift::isIntermediateRelease(SILInstruction *I,
 
   // This is a release on an owned parameter and its not the epilogue release.
   // Its not the final release.
-  SILInstruction *Rel = ERM.getSingleReleaseForArgument(Arg);
-  if (Rel && Rel != I)
+  auto Rel 
+     = EAFI->computeEpilogueARCInstructions(
+            EpilogueARCContext::EpilogueARCKind::Release, Arg);
+  if (Rel.size() && !Rel.count(I))
     return true;
 
   // Failed to prove anything.
@@ -321,7 +323,7 @@ void swift::replaceDeadApply(ApplySite Old, ValueBase *New) {
   recursivelyDeleteTriviallyDeadInstructions(OldApply, true);
 }
 
-bool swift::hasUnboundGenericTypes(TypeSubstitutionMap &SubsMap) {
+bool swift::hasUnboundGenericTypes(const TypeSubstitutionMap &SubsMap) {
   // Check whether any of the substitutions are dependent.
   for (auto &entry : SubsMap)
     if (entry.second->getCanonicalType()->hasArchetype())
@@ -338,7 +340,7 @@ bool swift::hasUnboundGenericTypes(ArrayRef<Substitution> Subs) {
   return false;
 }
 
-bool swift::hasDynamicSelfTypes(TypeSubstitutionMap &SubsMap) {
+bool swift::hasDynamicSelfTypes(const TypeSubstitutionMap &SubsMap) {
   // Check whether any of the substitutions are refer to dynamic self.
   for (auto &entry : SubsMap)
     if (entry.second->getCanonicalType()->hasDynamicSelfType())
@@ -527,14 +529,12 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
   }
 
   auto &M = B->getModule();
-  OptionalTypeKind SrcOTK;
-  OptionalTypeKind DestOTK;
 
   // Check if src and dest types are optional.
   auto OptionalSrcTy = SrcTy.getSwiftRValueType()
-                            .getAnyOptionalObjectType(SrcOTK);
+                            .getAnyOptionalObjectType();
   auto OptionalDestTy = DestTy.getSwiftRValueType()
-                              .getAnyOptionalObjectType(DestOTK);
+                              .getAnyOptionalObjectType();
 
   // If both types are classes and dest is the superclass of src,
   // simply perform an upcast.
@@ -576,7 +576,7 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
           OptionalDestLoweredTy, CheckOnly);
 
     // Unwrap the original optional value.
-    auto *SomeDecl = B->getASTContext().getOptionalSomeDecl(SrcOTK);
+    auto *SomeDecl = B->getASTContext().getOptionalSomeDecl();
     auto *NoneBB = B->getFunction().createBasicBlock();
     auto *SomeBB = B->getFunction().createBasicBlock();
     auto *CurBB = B->getInsertionPoint()->getParent();
@@ -599,8 +599,7 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
                                      OptionalSrcLoweredTy,
                                      OptionalDestLoweredTy).getValue();
     // Wrap into optional.
-    CastedValue =  B->createOptionalSome(Loc, CastedUnwrappedValue,
-                                        DestOTK, DestTy);
+    CastedValue =  B->createOptionalSome(Loc, CastedUnwrappedValue, DestTy);
     B->createBranch(Loc, ContBB, {CastedValue});
 
     // Handle the None case.
@@ -615,8 +614,8 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
 
   // Src is not optional, but dest is optional.
   if (!OptionalSrcTy && OptionalDestTy) {
-    auto OptionalSrcCanTy = OptionalType::get(DestOTK,
-        SrcTy.getSwiftRValueType()).getCanonicalTypeOrNull();
+    auto OptionalSrcCanTy =
+      OptionalType::get(SrcTy.getSwiftRValueType())->getCanonicalType();
     auto LoweredOptionalSrcType = M.Types.getLoweredType(OptionalSrcCanTy);
     if (CheckOnly)
       return castValueToABICompatibleType(B, Loc, Value,
@@ -625,7 +624,6 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
 
     // Wrap the source value into an optional first.
     SILValue WrappedValue = B->createOptionalSome(Loc, Value,
-                                                  DestOTK,
                                                   LoweredOptionalSrcType);
     // Cast the wrapped value.
     return castValueToABICompatibleType(B, Loc, WrappedValue,
@@ -1664,6 +1662,11 @@ optimizeBridgedSwiftToObjCCast(SILInstruction *Inst,
 
   auto SILFnTy = SILType::getPrimitiveObjectType(
       M.Types.getConstantFunctionType(BridgeFuncDeclRef));
+  
+  // TODO: Handle indirect argument to or return from witness function.
+  if (ParamTypes[0].isIndirect()
+      || BridgedFunc->getLoweredFunctionType()->getSingleResult().isIndirect())
+    return nullptr;
 
   // Get substitutions, if source is a bound generic type.
   ArrayRef<Substitution> Subs =
@@ -1680,7 +1683,7 @@ optimizeBridgedSwiftToObjCCast(SILInstruction *Inst,
   }
 
   // Compensate different owning conventions of the replaced cast instruction
-  // and the inserted convertion function.
+  // and the inserted conversion function.
   bool needRetainBeforeCall = false;
   bool needReleaseAfterCall = false;
   bool needReleaseInSucc = false;
@@ -1730,9 +1733,9 @@ optimizeBridgedSwiftToObjCCast(SILInstruction *Inst,
     case ParameterConvention::Direct_Unowned:
       break;
     case ParameterConvention::Indirect_In:
+    case ParameterConvention::Indirect_In_Guaranteed:
     case ParameterConvention::Indirect_Inout:
     case ParameterConvention::Indirect_InoutAliasable:
-    case ParameterConvention::Indirect_In_Guaranteed:
     case ParameterConvention::Direct_Deallocating:
       llvm_unreachable("unsupported convention for bridging conversion");
   }
@@ -2687,7 +2690,7 @@ bool swift::calleesAreStaticallyKnowable(SILModule &M, SILDeclRef Decl) {
   case Accessibility::Public:
     if (auto ctor = dyn_cast<ConstructorDecl>(AFD)) {
       if (ctor->isRequired())
-	return false;
+        return false;
     }
     SWIFT_FALLTHROUGH;
   case Accessibility::Internal:
@@ -2726,6 +2729,7 @@ void swift::hoistAddressProjections(Operand &Op, SILInstruction *InsertBefore,
       case ValueKind::StructElementAddrInst:
       case ValueKind::TupleElementAddrInst:
       case ValueKind::RefElementAddrInst:
+      case ValueKind::RefTailAddrInst:
       case ValueKind::UncheckedTakeEnumDataAddrInst: {
         auto *Inst = cast<SILInstruction>(V);
         // We are done once the current projection dominates the insert point.

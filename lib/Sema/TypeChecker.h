@@ -344,55 +344,61 @@ enum TypeResolutionFlags : unsigned {
   /// Whether this is the immediate input type to a function type,
   TR_ImmediateFunctionInput = 0x80,
 
+  /// Whether this is a variadic function input.
+  TR_VariadicFunctionInput = 0x100,
+
   /// Whether we are in the result type of a function body that is
   /// known to produce dynamic Self.
-  TR_DynamicSelfResult = 0x100,
+  TR_DynamicSelfResult = 0x200,
 
   /// Whether this is a resolution based on a non-inferred type pattern.
-  TR_FromNonInferredPattern = 0x200,
+  TR_FromNonInferredPattern = 0x400,
 
   /// Whether we are the variable type in a for/in statement.
-  TR_EnumerationVariable = 0x400,
+  TR_EnumerationVariable = 0x800,
 
   /// Whether we are looking only in the generic signature of the context
   /// we're searching, rather than the entire context.
-  TR_GenericSignature = 0x800,
+  TR_GenericSignature = 0x1000,
 
   /// Whether this type is the referent of a global type alias.
-  TR_GlobalTypeAlias = 0x1000,
+  TR_GlobalTypeAlias = 0x2000,
 
   /// Whether this type is the value carried in an enum case.
-  TR_EnumCase = 0x2000,
+  TR_EnumCase = 0x4000,
 
   /// Whether this type is being used in an expression or local declaration.
   ///
   /// This affects what sort of dependencies are recorded when resolving the
   /// type.
-  TR_InExpression = 0x4000,
+  TR_InExpression = 0x8000,
 
   /// Whether this type resolution is guaranteed not to affect downstream files.
-  TR_KnownNonCascadingDependency = 0x8000,
+  TR_KnownNonCascadingDependency = 0x10000,
 
   /// Whether we should allow references to unavailable types.
-  TR_AllowUnavailable = 0x10000,
+  TR_AllowUnavailable = 0x20000,
 
   /// Whether this is the payload subpattern of an enum pattern.
-  TR_EnumPatternPayload = 0x20000,
+  TR_EnumPatternPayload = 0x40000,
 
   /// Whether we are binding an extension declaration, which limits
   /// the lookup.
-  TR_ExtensionBinding = 0x40000,
+  TR_ExtensionBinding = 0x80000,
 
   /// Whether we are in the inheritance clause of a nominal type declaration
   /// or extension.
-  TR_InheritanceClause = 0x80000,
+  TR_InheritanceClause = 0x100000,
 
   /// Whether we should resolve only the structure of the resulting
   /// type rather than its complete semantic properties.
-  TR_ResolveStructure = 0x100000,
+  TR_ResolveStructure = 0x200000,
 
   /// Whether this is the type of an editor placeholder.
-  TR_EditorPlaceholder = 0x200000,
+  TR_EditorPlaceholder = 0x400000,
+
+  /// Whether we are in a type argument for an optional
+  TR_ImmediateOptionalTypeArgument = 0x800000,
 };
 
 /// Option set describing how type resolution should work.
@@ -405,10 +411,13 @@ inline TypeResolutionOptions operator|(TypeResolutionFlags lhs,
 
 /// Strip the contextual options from the given type resolution options.
 static inline TypeResolutionOptions
-withoutContext(TypeResolutionOptions options) {
+withoutContext(TypeResolutionOptions options, bool preserveSIL = false) {
   options -= TR_ImmediateFunctionInput;
   options -= TR_FunctionInput;
+  options -= TR_VariadicFunctionInput;
   options -= TR_EnumCase;
+  options -= TR_ImmediateOptionalTypeArgument;
+  if (!preserveSIL) options -= TR_SILType;
   return options;
 }
 
@@ -806,8 +815,7 @@ public:
   /// \param dc The context where the arguments are applied.
   /// \param generic The arguments to apply with the angle bracket range for
   /// diagnostics.
-  /// \param isGenericSignature True if we are looking only in the generic
-  /// signature of the context.
+  /// \param options The type resolution context.
   /// \param resolver The generic type resolver.
   ///
   /// \returns A BoundGenericType bound to the given arguments, or null on
@@ -816,7 +824,7 @@ public:
   /// \see applyUnboundGenericArguments
   Type applyGenericArguments(Type type, TypeDecl *decl, SourceLoc loc,
                              DeclContext *dc, GenericIdentTypeRepr *generic,
-                             bool isGenericSignature,
+                             TypeResolutionOptions options,
                              GenericTypeResolver *resolver);
 
   /// Apply generic arguments to the given type.
@@ -975,6 +983,8 @@ public:
     validateDecl(VD, true);
   }
 
+  virtual void bindExtension(ExtensionDecl *ext) override;
+
   virtual void resolveExtension(ExtensionDecl *ext) override {
     validateExtension(ext);
     checkInheritanceClause(ext);
@@ -988,6 +998,9 @@ public:
   resolveExternalDeclImplicitMembers(NominalTypeDecl *nominal) override {
     handleExternalDecl(nominal);
   }
+
+  /// Introduce the accessors for a 'lazy' variable.
+  void introduceLazyVarAccessors(VarDecl *var) override;
 
   /// Infer default value witnesses for all requirements in the given protocol.
   void inferDefaultWitnesses(ProtocolDecl *proto);
@@ -1966,6 +1979,23 @@ public:
                                               AnyMetatypeType *metaTy,
                                               ConstructorDecl *ctorDecl,
                                               bool SuppressDiagnostics);
+
+  /// Builds a string representing a "default" generic argument list for
+  /// \p typeDecl. In general, this means taking the bound of each generic
+  /// parameter. The \p getPreferredType callback can be used to provide a
+  /// different type from the bound.
+  ///
+  /// It may not always be possible to find a single appropriate type for a
+  /// particular parameter (say, if it has two bounds). In this case, an
+  /// Xcode-style placeholder will be used instead.
+  ///
+  /// Returns true if the arguments list could be constructed, false if for
+  /// some reason it could not.
+  bool getDefaultGenericArgumentsString(
+      SmallVectorImpl<char> &buf,
+      const GenericTypeDecl *typeDecl,
+      llvm::function_ref<Type(const GenericTypeParamDecl *)> getPreferredType =
+          [](const GenericTypeParamDecl *) { return Type(); });
 
   /// Attempt to omit needless words from the name of the given declaration.
   Optional<DeclName> omitNeedlessWords(AbstractFunctionDecl *afd);

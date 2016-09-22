@@ -334,7 +334,8 @@ public protocol Sequence {
 
   /// A type that represents a subsequence of some of the sequence's elements.
   associatedtype SubSequence
-  // FIXME(compiler limitation):
+  // FIXME(ABI)#104 (Recursive Protocol Constraints):
+  // FIXME(ABI)#105 (Associated Types with where clauses):
   // associatedtype SubSequence : Sequence
   //   where
   //   Iterator.Element == SubSequence.Iterator.Element,
@@ -589,17 +590,6 @@ public protocol Sequence {
     maxSplits: Int, omittingEmptySubsequences: Bool,
     whereSeparator isSeparator: (Iterator.Element) throws -> Bool
   ) rethrows -> [SubSequence]
-
-  /// Returns the first element of the sequence that satisfies the given
-  /// predicate or nil if no such element is found.
-  ///
-  /// - Parameter predicate: A closure that takes an element of the
-  ///   sequence as its argument and returns a Boolean value indicating
-  ///   whether the element is a match.
-  /// - Returns: The first match or `nil` if there was no match.
-  func first(
-    where predicate: (Iterator.Element) throws -> Bool
-  ) rethrows -> Iterator.Element?
 
   func _customContainsEquatableElement(
     _ element: Iterator.Element
@@ -1068,7 +1058,7 @@ extension Sequence {
   public func first(
     where predicate: (Iterator.Element) throws -> Bool
   ) rethrows -> Iterator.Element? {
-    var foundElement: Iterator.Element? = nil
+    var foundElement: Iterator.Element?
     do {
       try self.forEach {
         if try predicate($0) {

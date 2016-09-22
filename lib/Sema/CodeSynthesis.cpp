@@ -317,7 +317,7 @@ void swift::convertStoredVarInProtocolToComputed(VarDecl *VD, TypeChecker &TC) {
   auto *Get = createGetterPrototype(VD, TC);
   
   // Okay, we have both the getter and setter.  Set them in VD.
-  VD->makeComputed(VD->getLoc(), Get, nullptr, nullptr, VD->getLoc());
+  VD->makeComputed(SourceLoc(), Get, nullptr, nullptr, SourceLoc());
   
   // We've added some members to our containing class, add them to the members
   // list.
@@ -983,7 +983,7 @@ static void convertNSManagedStoredVarToComputed(VarDecl *VD, TypeChecker &TC) {
   if (VD->hasAccessorFunctions()) return;
 
   // Okay, we have both the getter and setter.  Set them in VD.
-  VD->makeComputed(VD->getLoc(), Get, Set, nullptr, VD->getLoc());
+  VD->makeComputed(SourceLoc(), Get, Set, nullptr, SourceLoc());
 
   TC.validateDecl(Get);
   TC.validateDecl(Set);
@@ -1161,14 +1161,12 @@ void TypeChecker::completePropertyBehaviorStorage(VarDecl *VD,
   // Substitute the storage type into the conforming context.
   auto sig = BehaviorConformance->getProtocol()->getGenericSignatureOfContext();
 
-  TypeSubstitutionMap interfaceMap = sig->getSubstitutionMap(SelfInterfaceSubs);
-  auto SubstStorageInterfaceTy = StorageTy.subst(VD->getModuleContext(),
-                                        interfaceMap, SubstOptions());
+  auto interfaceMap = sig->getSubstitutionMap(SelfInterfaceSubs);
+  auto SubstStorageInterfaceTy = StorageTy.subst(interfaceMap, SubstOptions());
   assert(SubstStorageInterfaceTy && "storage type substitution failed?!");
 
-  TypeSubstitutionMap contextMap = sig->getSubstitutionMap(SelfContextSubs);
-  auto SubstStorageContextTy = StorageTy.subst(VD->getModuleContext(),
-                                               contextMap, SubstOptions());
+  auto contextMap = sig->getSubstitutionMap(SelfContextSubs);
+  auto SubstStorageContextTy = StorageTy.subst(contextMap, SubstOptions());
   assert(SubstStorageContextTy && "storage type substitution failed?!");
 
   auto DC = VD->getDeclContext();
@@ -1312,14 +1310,12 @@ void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
   GenericSignature *genericSig = nullptr;
   GenericEnvironment *genericEnv = nullptr;
 
-  TypeSubstitutionMap interfaceMap = sig->getSubstitutionMap(SelfInterfaceSubs);
-  auto SubstInterfaceTy = ParameterTy.subst(VD->getModuleContext(),
-                                            interfaceMap, SubstOptions());
+  auto interfaceMap = sig->getSubstitutionMap(SelfInterfaceSubs);
+  auto SubstInterfaceTy = ParameterTy.subst(interfaceMap, SubstOptions());
   assert(SubstInterfaceTy && "storage type substitution failed?!");
   
-  TypeSubstitutionMap contextMap = sig->getSubstitutionMap(SelfContextSubs);
-  auto SubstContextTy = ParameterTy.subst(VD->getModuleContext(),
-                                                 contextMap, SubstOptions());
+  auto contextMap = sig->getSubstitutionMap(SelfContextSubs);
+  auto SubstContextTy = ParameterTy.subst(contextMap, SubstOptions());
   assert(SubstContextTy && "storage type substitution failed?!");
 
   auto SubstBodyResultTy = SubstContextTy->castTo<AnyFunctionType>()
@@ -1369,12 +1365,9 @@ void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
   for (unsigned i : indices(*DeclaredParams)) {
     auto declaredParam = DeclaredParams->get(i);
     auto declaredParamTy = declaredParam->getInterfaceType();
-    auto interfaceTy = declaredParamTy.subst(DC->getParentModule(),
-                                             interfaceMap,
-                                             SubstOptions());
+    auto interfaceTy = declaredParamTy.subst(interfaceMap, SubstOptions());
     assert(interfaceTy);
-    auto contextTy = declaredParamTy.subst(DC->getParentModule(),
-                                           contextMap, SubstOptions());
+    auto contextTy = declaredParamTy.subst(contextMap, SubstOptions());
     assert(contextTy);
 
     SmallString<64> ParamNameBuf;
@@ -1679,6 +1672,10 @@ void swift::maybeAddMaterializeForSet(AbstractStorageDecl *storage,
   addMaterializeForSet(storage, TC);
 }
 
+void TypeChecker::introduceLazyVarAccessors(VarDecl *var) {
+  maybeAddAccessorsToVariable(var, *this);
+}
+
 void swift::maybeAddAccessorsToVariable(VarDecl *var, TypeChecker &TC) {
   // If we've already synthesized accessors or are currently in the process
   // of doing so, don't proceed.
@@ -1739,7 +1736,7 @@ void swift::maybeAddAccessorsToVariable(VarDecl *var, TypeChecker &TC) {
         setter->setAccessibility(var->getFormalAccess());
       }
       
-      var->makeComputed(var->getLoc(), getter, setter, nullptr, var->getLoc());
+      var->makeComputed(SourceLoc(), getter, setter, nullptr, SourceLoc());
       
       // Save the conformance and 'value' decl for later type checking.
       behavior->Conformance = conformance;
@@ -1844,8 +1841,7 @@ void swift::maybeAddAccessorsToVariable(VarDecl *var, TypeChecker &TC) {
 
     ParamDecl *newValueParam = nullptr;
     auto *setter = createSetterPrototype(var, newValueParam, TC);
-    var->makeComputed(var->getLoc(), getter, setter, nullptr,
-                      var->getLoc());
+    var->makeComputed(SourceLoc(), getter, setter, nullptr, SourceLoc());
     var->setIsBeingTypeChecked(false);
 
     TC.validateDecl(getter);
@@ -2098,7 +2094,7 @@ swift::createDesignatedInitOverride(TypeChecker &tc,
 
         // Apply the superclass substitutions to produce a contextual
         // type in terms of the derived class archetypes.
-        auto paramSubstTy = paramTy.subst(moduleDecl, subsMap, SubstOptions());
+        auto paramSubstTy = paramTy.subst(subsMap, SubstOptions());
         decl->overwriteType(paramSubstTy);
 
         // Map it to an interface type in terms of the derived class

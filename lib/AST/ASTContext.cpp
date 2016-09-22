@@ -2551,6 +2551,9 @@ void ASTContext::dumpArchetypeContext(ArchetypeType *archetype,
 void ASTContext::dumpArchetypeContext(ArchetypeType *archetype,
                                       llvm::raw_ostream &os,
                                       unsigned indent) const {
+  if (archetype->isOpenedExistential())
+    return;
+
   archetype = archetype->getPrimary();
   if (!archetype)
     return;
@@ -2901,6 +2904,8 @@ ReferenceStorageType *ReferenceStorageType::get(Type T, Ownership ownership,
       new (C, arena) UnownedStorageType(T, T->isCanonical() ? &C : 0,
                                         properties);
   case Ownership::Weak:
+    assert(T->getAnyOptionalObjectType() &&
+           "object of weak storage type is not optional");
     return entry =
       new (C, arena) WeakStorageType(T, T->isCanonical() ? &C : 0,
                                      properties);
@@ -3877,18 +3882,22 @@ ASTContext::getForeignRepresentationInfo(NominalTypeDecl *nominal,
        known->second.getGeneration() < CurrentGeneration)) {
     Optional<ForeignRepresentationInfo> result;
 
-    // Look for a conformance to _ObjectiveCBridgeable.
+    // Look for a conformance to _ObjectiveCBridgeable (other than Optional's--
+    // we don't want to allow exposing APIs with double-optional types like
+    // NSObject??, even though Optional is bridged to its underlying type).
     //
     // FIXME: We're implicitly depending on the fact that lookupConformance
     // is global, ignoring the module we provide for it.
-    if (auto objcBridgeable
-          = getProtocol(KnownProtocolKind::ObjectiveCBridgeable)) {
-      if (auto conformance
-            = dc->getParentModule()->lookupConformance(
-                nominal->getDeclaredType(), objcBridgeable,
-                getLazyResolver())) {
-        result =
-            ForeignRepresentationInfo::forBridged(conformance->getConcrete());
+    if (nominal != dc->getASTContext().getOptionalDecl()) {
+      if (auto objcBridgeable
+            = getProtocol(KnownProtocolKind::ObjectiveCBridgeable)) {
+        if (auto conformance
+              = dc->getParentModule()->lookupConformance(
+                  nominal->getDeclaredType(), objcBridgeable,
+                  getLazyResolver())) {
+          result =
+              ForeignRepresentationInfo::forBridged(conformance->getConcrete());
+        }
       }
     }
 
@@ -3936,7 +3945,7 @@ ASTContext::getForeignRepresentationInfo(NominalTypeDecl *nominal,
   }
 }
 
-bool ASTContext::isStandardLibraryTypeBridgedInFoundation(
+bool ASTContext::isTypeBridgedInExternalModule(
      NominalTypeDecl *nominal) const {
   return (nominal == getBoolDecl() ||
           nominal == getIntDecl() ||
@@ -3949,8 +3958,18 @@ bool ASTContext::isStandardLibraryTypeBridgedInFoundation(
           nominal == getStringDecl() ||
           nominal == getErrorDecl() ||
           nominal == getAnyHashableDecl() ||
-          // Weird one-off case where CGFloat is bridged to NSNumber.
-          nominal->getName() == Id_CGFloat);
+          // Foundation's overlay depends on the CoreGraphics overlay, but
+          // CoreGraphics value types bridge to Foundation objects such as
+          // NSValue and NSNumber, so to avoid circular dependencies, the
+          // bridging implementations of CG types appear in the Foundation
+          // module.
+          nominal->getParentModule()->getName() == Id_CoreGraphics ||
+          // CoreMedia is a dependency of AVFoundation, but the bridged
+          // NSValue implementations for CMTime, CMTimeRange, and
+          // CMTimeMapping are provided by AVFoundation, and AVFoundation
+          // gets upset if you don't use the NSValue subclasses its factory
+          // methods instantiate.
+          nominal->getParentModule()->getName() == Id_CoreMedia);
 }
 
 Type ASTContext::getBridgedToObjC(const DeclContext *dc, Type type,
@@ -3984,6 +4003,11 @@ Type ASTContext::getBridgedToObjC(const DeclContext *dc, Type type,
   // Try to find a conformance that will enable bridging.
   auto findConformance =
     [&](KnownProtocolKind known) -> Optional<ProtocolConformanceRef> {
+      // Don't ascribe any behavior to Optional other than what we explicitly
+      // give it. We don't want things like AnyObject?? to work.
+      if (type->getAnyNominal() == getOptionalDecl())
+        return None;
+      
       // Find the protocol.
       auto proto = getProtocol(known);
       if (!proto) return None;

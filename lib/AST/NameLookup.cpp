@@ -402,12 +402,12 @@ static DeclVisibilityKind getLocalDeclVisibilityKind(const ASTScope *scope) {
   switch (scope->getKind()) {
   case ASTScopeKind::Preexpanded:
   case ASTScopeKind::SourceFile:
-  case ASTScopeKind::TypeOrExtensionBody:
+  case ASTScopeKind::TypeDecl:
   case ASTScopeKind::AbstractFunctionDecl:
+  case ASTScopeKind::TypeOrExtensionBody:
+  case ASTScopeKind::AbstractFunctionBody:
   case ASTScopeKind::DefaultArgument:
   case ASTScopeKind::PatternBinding:
-  case ASTScopeKind::PatternInitializer:
-  case ASTScopeKind::BraceStmt:
   case ASTScopeKind::IfStmt:
   case ASTScopeKind::GuardStmt:
   case ASTScopeKind::RepeatWhileStmt:
@@ -419,17 +419,19 @@ static DeclVisibilityKind getLocalDeclVisibilityKind(const ASTScope *scope) {
   case ASTScopeKind::TopLevelCode:
     llvm_unreachable("no local declarations?");
 
+  case ASTScopeKind::ExtensionGenericParams:
   case ASTScopeKind::GenericParams:
     return DeclVisibilityKind::GenericParameter;
 
   case ASTScopeKind::AbstractFunctionParams:
   case ASTScopeKind::Closure:
+  case ASTScopeKind::PatternInitializer:  // lazy var 'self'
     return DeclVisibilityKind::FunctionParameter;
 
   case ASTScopeKind::AfterPatternBinding:
-  case ASTScopeKind::LocalDeclaration:
   case ASTScopeKind::ConditionalClause:
   case ASTScopeKind::ForEachPattern:
+  case ASTScopeKind::BraceStmt:
   case ASTScopeKind::CatchStmt:
   case ASTScopeKind::CaseStmt:
   case ASTScopeKind::ForStmtInitializer:
@@ -455,7 +457,9 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
   SmallVector<UnqualifiedLookupResult, 4> UnavailableInnerResults;
 
-  if (Loc.isValid() && Ctx.LangOpts.EnableASTScopeLookup) {
+  if (Loc.isValid() &&
+      DC->getParentSourceFile()->Kind != SourceFileKind::REPL &&
+      Ctx.LangOpts.EnableASTScopeLookup) {
     // Find the source file in which we are performing the lookup.
     SourceFile &sourceFile = *DC->getParentSourceFile();
 
@@ -477,11 +481,13 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
   
     // Walk scopes outward from the innermost scope until we find something.
     bool lookupInNominalIsStatic = true;
+    ParamDecl *selfDecl = nullptr;
     bool withinDefaultArgument = false;
     for (auto currentScope = lookupScope; currentScope;
          currentScope = currentScope->getParent()) {
       // Perform local lookup within this scope.
-      for (auto local : currentScope->getLocalBindings()) {
+      auto localBindings = currentScope->getLocalBindings();
+      for (auto local : localBindings) {
         Consumer.foundDecl(local,
                            getLocalDeclVisibilityKind(currentScope));
       }
@@ -489,6 +495,15 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
       // If we found anything, we're done.
       if (!Results.empty())
         return;
+
+      // When we are in the body of a method, get the 'self' declaration.
+      if (currentScope->getKind() == ASTScopeKind::AbstractFunctionBody &&
+          currentScope->getAbstractFunctionDecl()->getDeclContext()
+            ->isTypeContext()) {
+        selfDecl =
+          currentScope->getAbstractFunctionDecl()->getImplicitSelfDecl();
+        continue;
+      }
 
       // If there is a declaration context associated with this scope, we might
       // want to look in it.
@@ -502,10 +517,31 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
         // Pattern binding initializers are only interesting insofar as they
         // affect lookup in an enclosing nominal type or extension thereof.
         if (auto *bindingInit = dyn_cast<PatternBindingInitializer>(dc)) {
-          if (auto binding = bindingInit->getBinding())
+          if (auto binding = bindingInit->getBinding()) {
             lookupInNominalIsStatic = binding->isStatic();
           
-          // FIXME: Look for 'self' for a lazy variable initializer.
+            // Look for 'self' for a lazy variable initializer.
+            if (auto singleVar = binding->getSingleVar())
+              // We only care about lazy variables.
+              if (singleVar->getAttrs().hasAttribute<LazyAttr>()) {
+
+              // 'self' will be listed in the local bindings.
+              for (auto local : localBindings) {
+                auto param = dyn_cast<ParamDecl>(local);
+                if (!param) continue;
+
+
+                // If we have a variable that's the implicit self of its enclosing
+                // context, mark it as 'self'.
+                if (auto func = dyn_cast<FuncDecl>(param->getDeclContext())) {
+                  if (param == func->getImplicitSelfDecl()) {
+                    selfDecl = param;
+                    break;
+                  }
+                }
+              }
+            }
+          }
           continue;
         }
 
@@ -544,7 +580,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           continue;
         }
 
-        // Top-level declarations have no lokup of their own.
+        // Top-level declarations have no lookup of their own.
         if (isa<TopLevelCodeDecl>(dc)) continue;
 
         // Typealiases have no lookup of their own.
@@ -564,7 +600,14 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
         // Dig out the type we're looking into.
         // FIXME: We shouldn't need to compute a type to perform this lookup.
-        auto lookupType = dc->getDeclaredTypeInContext();
+        Type lookupType = dc->getSelfTypeInContext();
+
+        // FIXME: Hack to deal with missing 'Self' archetypes.
+        if (!lookupType) {
+          if (auto proto = dc->getAsProtocolOrProtocolExtensionContext())
+            lookupType = proto->getDeclaredType();
+        }
+
         if (!lookupType || lookupType->is<ErrorType>()) continue;
 
         // If we're performing a static lookup, use the metatype.
@@ -590,8 +633,10 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
         SmallVector<ValueDecl *, 4> lookup;
         dc->lookupQualified(lookupType, Name, options, TypeResolver, lookup);
+        ValueDecl *baseDecl = nominal;
+        if (selfDecl) baseDecl = selfDecl;
         for (auto result : lookup) {
-          Results.push_back(UnqualifiedLookupResult(nominal, result));
+          Results.push_back(UnqualifiedLookupResult(baseDecl, result));
         }
 
         if (!Results.empty()) {
@@ -614,6 +659,9 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             return;
           }
         }
+
+        // Forget the 'self' declaration.
+        selfDecl = nullptr;
       }
     }
   } else {
@@ -1403,16 +1451,14 @@ bool DeclContext::lookupQualified(Type type,
       if (visited.insert(proto).second)
         stack.push_back(proto);
 
-    // If requested, look into the superclasses of this archetype.
-    if (options & NL_VisitSupertypes) {
-      if (auto superclassTy = archetypeTy->getSuperclass()) {
-        if (auto superclassDecl = superclassTy->getAnyNominal()) {
-          if (visited.insert(superclassDecl).second) {
-            stack.push_back(superclassDecl);
+    // Look into the superclasses of this archetype.
+    if (auto superclassTy = archetypeTy->getSuperclass()) {
+      if (auto superclassDecl = superclassTy->getAnyNominal()) {
+        if (visited.insert(superclassDecl).second) {
+          stack.push_back(superclassDecl);
 
-            wantProtocolMembers = (options & NL_ProtocolMembers) &&
-                                  !isa<ProtocolDecl>(superclassDecl);
-          }
+          wantProtocolMembers = (options & NL_ProtocolMembers) &&
+                                !isa<ProtocolDecl>(superclassDecl);
         }
       }
     }
@@ -1515,10 +1561,6 @@ bool DeclContext::lookupQualified(Type type,
       if (isAcceptableDecl(current, decl))
         decls.push_back(decl);
     }
-
-    // If we're not supposed to visit our supertypes, we're done.
-    if ((options & NL_VisitSupertypes) == 0)
-      continue;
 
     // Visit superclass.
     if (auto classDecl = dyn_cast<ClassDecl>(current)) {

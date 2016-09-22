@@ -387,7 +387,7 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
         TC.diagnose(c->getLoc(), diag::collection_literal_empty)
           .highlight(c->getSourceRange());
       else {
-        TC.diagnose(c->getLoc(), diag::collection_literal_heterogenous,
+        TC.diagnose(c->getLoc(), diag::collection_literal_heterogeneous,
                     c->getType())
           .highlight(c->getSourceRange())
           .fixItInsertAfter(c->getEndLoc(), " as " + c->getType()->getString());
@@ -932,6 +932,69 @@ static void diagnoseImplicitSelfUseInClosure(TypeChecker &TC, const Expr *E,
   const_cast<Expr *>(E)->walk(DiagnoseWalker(TC, isAlreadyInClosure));
 }
 
+bool TypeChecker::getDefaultGenericArgumentsString(
+    SmallVectorImpl<char> &buf,
+    const swift::GenericTypeDecl *typeDecl,
+    llvm::function_ref<Type(const GenericTypeParamDecl *)> getPreferredType) {
+  llvm::raw_svector_ostream genericParamText{buf};
+  genericParamText << "<";
+
+  auto printGenericParamSummary =
+      [&](const GenericTypeParamType *genericParamTy) {
+    const GenericTypeParamDecl *genericParam = genericParamTy->getDecl();
+    if (Type result = getPreferredType(genericParam)) {
+      result.print(genericParamText);
+      return;
+    }
+
+    ArrayRef<ProtocolDecl *> protocols =
+        genericParam->getConformingProtocols(this);
+
+    if (Type superclass = genericParam->getSuperclass()) {
+      if (protocols.empty()) {
+        superclass.print(genericParamText);
+        return;
+      }
+
+      genericParamText << "<#" << genericParam->getName() << ": ";
+      superclass.print(genericParamText);
+      for (const ProtocolDecl *proto : protocols) {
+        if (proto->isSpecificProtocol(KnownProtocolKind::AnyObject))
+          continue;
+        genericParamText << " & " << proto->getName();
+      }
+      genericParamText << "#>";
+      return;
+    }
+
+    if (protocols.empty()) {
+      genericParamText << Context.Id_Any;
+      return;
+    }
+
+    if (protocols.size() == 1 &&
+        (protocols.front()->isObjC() ||
+         protocols.front()->isSpecificProtocol(KnownProtocolKind::AnyObject))) {
+      genericParamText << protocols.front()->getName();
+      return;
+    }
+
+    genericParamText << "<#" << genericParam->getName() << ": ";
+    interleave(protocols,
+               [&](const ProtocolDecl *proto) {
+                 genericParamText << proto->getName();
+               },
+               [&] { genericParamText << " & "; });
+    genericParamText << "#>";
+  };
+
+  interleave(typeDecl->getInnermostGenericParamTypes(),
+             printGenericParamSummary, [&]{ genericParamText << ", "; });
+
+  genericParamText << ">";
+  return true;
+}
+
 /// Diagnose an argument labeling issue, returning true if we successfully
 /// diagnosed the issue.
 bool swift::diagnoseArgumentLabelError(TypeChecker &TC, const Expr *expr,
@@ -956,7 +1019,7 @@ bool swift::diagnoseArgumentLabelError(TypeChecker &TC, const Expr *expr,
       // This is probably a conversion from a value of labeled tuple type to
       // a scalar.
       // FIXME: We want this issue to disappear completely when single-element
-      // labelled tuples go away.
+      // labeled tuples go away.
       if (auto tupleTy = expr->getType()->getRValueType()->getAs<TupleType>()) {
         int scalarFieldIdx = tupleTy->getElementForScalarInit();
         if (scalarFieldIdx >= 0) {
@@ -1143,7 +1206,14 @@ bool swift::fixItOverrideDeclarationTypes(TypeChecker &TC,
     // ...and just knowing that it's bridged isn't good enough if we don't
     // know what it's bridged /to/. Also, don't do this check for trivial
     // bridging---that doesn't count.
-    Type bridged = TC.Context.getBridgedToObjC(DC, normalizedBaseTy);
+    Type bridged;
+    if (normalizedBaseTy->isAny()) {
+      const ProtocolDecl *anyObjectProto =
+          TC.Context.getProtocol(KnownProtocolKind::AnyObject);
+      bridged = anyObjectProto->getDeclaredType();
+    } else {
+      bridged = TC.Context.getBridgedToObjC(DC, normalizedBaseTy);
+    }
     if (!bridged || bridged->isEqual(normalizedBaseTy))
       return false;
 
@@ -1190,7 +1260,7 @@ bool swift::fixItOverrideDeclarationTypes(TypeChecker &TC,
     if (overrideFnTy && baseFnTy &&
         // The overriding function type should be no escaping.
         overrideFnTy->getExtInfo().isNoEscape() &&
-        // The overriden function type should be escaping.
+        // The overridden function type should be escaping.
         !baseFnTy->getExtInfo().isNoEscape()) {
       diag.fixItInsert(typeRange.Start, "@escaping ");
       return true;
@@ -3583,7 +3653,55 @@ checkImplicitPromotionsInCondition(const StmtConditionElement &cond,
       .highlight(subExpr->getSourceRange());
   }
 }
-        
+
+static void diagnoseOptionalToAnyCoercion(TypeChecker &TC, const Expr *E,
+                                          const DeclContext *DC) {
+  if (!E || isa<ErrorExpr>(E) || !E->getType())
+    return;
+
+  class OptionalToAnyCoercionWalker : public ASTWalker {
+    TypeChecker &TC;
+    SmallPtrSet<Expr *, 4> ErasureCoercedToAny;
+
+    virtual std::pair<bool, Expr *> walkToExprPre(Expr *E) {
+      if (!E || isa<ErrorExpr>(E) || !E->getType())
+        return { false, E };
+
+      if (auto *coercion = dyn_cast<CoerceExpr>(E)) {
+        if (E->getType()->isAny() && isa<ErasureExpr>(coercion->getSubExpr()))
+          ErasureCoercedToAny.insert(coercion->getSubExpr());
+      } else if (isa<ErasureExpr>(E) && !ErasureCoercedToAny.count(E) &&
+                 E->getType()->isAny()) {
+        auto subExpr = cast<ErasureExpr>(E)->getSubExpr();
+        auto erasedTy = subExpr->getType();
+        if (erasedTy->getOptionalObjectType()) {
+          TC.diagnose(subExpr->getStartLoc(), diag::optional_to_any_coercion,
+                      erasedTy)
+              .highlight(subExpr->getSourceRange());
+
+          TC.diagnose(subExpr->getLoc(), diag::default_optional_to_any)
+              .highlight(subExpr->getSourceRange())
+              .fixItInsertAfter(subExpr->getEndLoc(), " ?? <#default value#>");
+          TC.diagnose(subExpr->getLoc(), diag::force_optional_to_any)
+              .highlight(subExpr->getSourceRange())
+              .fixItInsertAfter(subExpr->getEndLoc(), "!");
+          TC.diagnose(subExpr->getLoc(), diag::silence_optional_to_any)
+              .highlight(subExpr->getSourceRange())
+              .fixItInsertAfter(subExpr->getEndLoc(), " as Any");
+        }
+      }
+
+      return { true, E };
+    }
+
+  public:
+    OptionalToAnyCoercionWalker(TypeChecker &tc) : TC(tc) { }
+  };
+
+  OptionalToAnyCoercionWalker Walker(TC);
+  const_cast<Expr *>(E)->walk(Walker);
+}
+
 //===----------------------------------------------------------------------===//
 // High-level entry points.
 //===----------------------------------------------------------------------===//
@@ -3596,6 +3714,7 @@ void swift::performSyntacticExprDiagnostics(TypeChecker &TC, const Expr *E,
   diagSyntacticUseRestrictions(TC, E, DC, isExprStmt);
   diagRecursivePropertyAccess(TC, E, DC);
   diagnoseImplicitSelfUseInClosure(TC, E, DC);
+  diagnoseOptionalToAnyCoercion(TC, E, DC);
   if (!TC.getLangOpts().DisableAvailabilityChecking)
     diagAvailability(TC, E, const_cast<DeclContext*>(DC));
   if (TC.Context.LangOpts.EnableObjCInterop)

@@ -2480,7 +2480,7 @@ public:
   /// function type and return the resulting non-generic type.
   ///
   /// The order of Substitutions must match the order of generic parameters.
-  FunctionType *substGenericArgs(ModuleDecl *M, ArrayRef<Substitution> subs);
+  FunctionType *substGenericArgs(ArrayRef<Substitution> subs);
 
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, getGenericSignature(), getInput(), getResult(),
@@ -3757,17 +3757,6 @@ public:
     return AssocTypeOrProto.dyn_cast<ProtocolDecl *>();
   }
   
-  /// True if this is the 'Self' parameter of a protocol or an associated type
-  /// of 'Self'.
-  bool isSelfDerived() {
-    ArchetypeType *t = getPrimary();
-
-    if (t && t->getSelfProtocol())
-      return true;
-
-    return false;
-  }
-
   /// getConformsTo - Retrieve the set of protocols to which this substitutable
   /// type shall conform.
   ArrayRef<ProtocolDecl *> getConformsTo() const { return ConformsTo; }

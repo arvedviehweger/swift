@@ -61,6 +61,8 @@ def emit_fixits_path
 def verify : Flag<["-"], "verify">,
   HelpText<"Verify diagnostics against expected-{error|warning|note} "
            "annotations">;
+def verify_apply_fixes : Flag<["-"], "verify-apply-fixes">,
+  HelpText<"Like -verify, but updates the original source file">;
 
 def show_diagnostics_after_fatal : Flag<["-"], "show-diagnostics-after-fatal">,
   HelpText<"Keep emitting subsequent diagnostics after a fatal error">;
@@ -237,10 +239,6 @@ def disable_availability_checking : Flag<["-"],
 def enable_infer_import_as_member :
   Flag<["-"], "enable-infer-import-as-member">,
   HelpText<"Infer when a global could be imported as a member">;
-
-def enable_swift_newtype :
-  Flag<["-"], "enable-swift-newtype">,
-  HelpText<"Enable the swift_newtype attribute">;
 
 def warn_long_function_bodies : Separate<["-"], "warn-long-function-bodies">,
   MetaVarName<"<n>">,
