@@ -106,6 +106,10 @@ class SILVerifier : public SILVerifierBase<SILVerifier> {
   SILVerifier(const SILVerifier&) = delete;
   void operator=(const SILVerifier&) = delete;
 public:
+  bool isSILOwnershipEnabled() const {
+    return F.getModule().getOptions().EnableSILOwnership;
+  }
+
   void _require(bool condition, const Twine &complaint,
                 const std::function<void()> &extraContext = nullptr) {
     if (condition) return;
@@ -128,6 +132,9 @@ public:
   }
 #define require(condition, complaint) \
   _require(bool(condition), complaint ": " #condition)
+#define requireTrueAndSILOwnership(verifier, condition, complaint)             \
+  _require(!verifier->isSILOwnershipEnabled() || bool(condition),              \
+           complaint ": " #condition)
 
   template <class T> typename CanTypeWrapperTraits<T>::type
   _requireObjectType(SILType type, const Twine &valueDescription,
@@ -406,9 +413,10 @@ public:
     }
   }
 
-  SILVerifier(const SILFunction &F, bool SingleFunction=true)
-    : M(F.getModule().getSwiftModule()), F(F), TC(F.getModule().Types),
-      OpenedArchetypes(F), Dominance(nullptr), SingleFunction(SingleFunction) {
+  SILVerifier(const SILFunction &F, bool SingleFunction = true)
+      : M(F.getModule().getSwiftModule()), F(F), TC(F.getModule().Types),
+        OpenedArchetypes(F), Dominance(nullptr),
+        SingleFunction(SingleFunction) {
     if (F.isExternalDeclaration())
       return;
       
@@ -677,27 +685,33 @@ public:
     }
   }
 
-  void checkAllocRefInst(AllocRefInst *AI) {
-    requireReferenceValue(AI, "Result of alloc_ref");
-    require(AI->isObjC() || AI->getType().getClassOrBoundGenericClass(),
-            "alloc_ref must allocate class");
-    verifyOpenedArchetype(AI, AI->getType().getSwiftRValueType());
-    auto Types = AI->getTailAllocatedTypes();
-    auto Counts = AI->getTailAllocatedCounts();
+  void checkAllocRefBase(AllocRefInstBase *ARI) {
+    requireReferenceValue(ARI, "Result of alloc_ref");
+    verifyOpenedArchetype(ARI, ARI->getType().getSwiftRValueType());
+    auto Types = ARI->getTailAllocatedTypes();
+    auto Counts = ARI->getTailAllocatedCounts();
     unsigned NumTypes = Types.size();
     require(NumTypes == Counts.size(), "Mismatching types and counts");
+    require(NumTypes == 0 || !ARI->isObjC(),
+            "Can't tail allocate with ObjC class");
     for (unsigned Idx = 0; Idx < NumTypes; ++Idx) {
-      verifyOpenedArchetype(AI, Types[Idx].getSwiftRValueType());
+      verifyOpenedArchetype(ARI, Types[Idx].getSwiftRValueType());
       require(Counts[Idx].get()->getType().is<BuiltinIntegerType>(),
               "count needs integer type");
     }
   }
 
+  void checkAllocRefInst(AllocRefInst *AI) {
+    require(AI->isObjC() || AI->getType().getClassOrBoundGenericClass(),
+            "alloc_ref must allocate class");
+    checkAllocRefBase(AI);
+  }
+
   void checkAllocRefDynamicInst(AllocRefDynamicInst *ARDI) {
-    requireReferenceValue(ARDI, "Result of alloc_ref_dynamic");
-    require(ARDI->getOperand()->getType().is<AnyMetatypeType>(),
+    SILValue Metadata = ARDI->getMetatypeOperand();
+    require(Metadata->getType().is<AnyMetatypeType>(),
             "operand of alloc_ref_dynamic must be of metatype type");
-    auto metaTy = ARDI->getOperand()->getType().castTo<AnyMetatypeType>();
+    auto metaTy = Metadata->getType().castTo<AnyMetatypeType>();
     require(metaTy->hasRepresentation(),
             "operand of alloc_ref_dynamic must have a metatype representation");
     if (ARDI->isObjC()) {
@@ -707,7 +721,7 @@ public:
       require(metaTy->getRepresentation() == MetatypeRepresentation::Thick,
               "alloc_ref_dynamic requires operand of thick metatype");
     }
-    verifyOpenedArchetype(ARDI, ARDI->getType().getSwiftRValueType());
+    checkAllocRefBase(ARDI);
   }
 
   /// Check the substitutions passed to an apply or partial_apply.
@@ -990,6 +1004,57 @@ public:
                 "function");
       }
     }
+    
+    // TODO: Impose additional constraints when partial_apply when the
+    // -disable-sil-partial-apply flag is enabled. We want to reduce
+    // partial_apply to being only a means of associating a closure invocation
+    // function with its context.
+    //
+    // When we reach that point, we should be able to more deeply redesign
+    // PartialApplyInst to simplify the representation to carry a single
+    // argument.
+    if (PAI->getModule().getOptions().DisableSILPartialApply) {
+      // Should only be one context argument.
+      require(PAI->getArguments().size() == 1,
+              "partial_apply should have a single context argument");
+      
+      // Callee should already have the thin convention, and result should be
+      // thick.
+      require(resultInfo->getRepresentation() ==
+                SILFunctionTypeRepresentation::Thick,
+              "partial_apply result should have thick convention");
+      require(PAI->getCallee()->getType().castTo<SILFunctionType>()
+                ->getRepresentation() ==
+              SILFunctionTypeRepresentation::Thin,
+              "partial_apply callee should have thin convention");
+      
+      // TODO: Check that generic signature matches box's generic signature,
+      // once we have boxes with generic signatures.
+      require(!PAI->getCalleeFunction()->getGenericEnvironment(),
+              "partial_apply context must capture generic environment for "
+              "callee");
+      
+      // Result's callee convention should match context argument's convention.
+      require(substTy->getParameters().back().getConvention()
+                == resultInfo->getCalleeConvention(),
+              "partial_apply context argument must have the same convention "
+              "as the resulting function's callee convention");
+      
+      auto isSwiftRefcounted = [](SILType t) -> bool {
+        if (t.is<SILBoxType>())
+          return true;
+        if (t.getSwiftRValueType() == t.getASTContext().TheNativeObjectType)
+          return true;
+        if (auto clas = t.getClassOrBoundGenericClass())
+          // Must be a class defined in Swift.
+          return clas->hasKnownSwiftImplementation();
+        return false;
+      };
+      
+      // The context argument must be a swift-refcounted box or class.
+      require(isSwiftRefcounted(PAI->getArguments().front()->getType()),
+              "partial_apply context argument must be swift-refcounted");
+    }
   }
 
   void checkBuiltinInst(BuiltinInst *BI) {
@@ -1043,6 +1108,7 @@ public:
     require(ILI->getType().is<BuiltinIntegerType>(),
             "invalid integer literal type");
   }
+
   void checkLoadInst(LoadInst *LI) {
     require(LI->getType().isObject(), "Result of load must be an object");
     require(LI->getType().isLoadable(LI->getModule()),
@@ -1051,6 +1117,60 @@ public:
             "Load operand must be an address");
     require(LI->getOperand()->getType().getObjectType() == LI->getType(),
             "Load operand type and result type mismatch");
+
+    // Ownership semantic checks.
+    switch (LI->getOwnershipQualifier()) {
+    case LoadOwnershipQualifier::Unqualified:
+      // We should not see loads with unqualified ownership when SILOwnership is
+      // enabled.
+      requireTrueAndSILOwnership(
+          this, F.hasUnqualifiedOwnership(),
+          "Load with unqualified ownership in a qualified function");
+      break;
+    case LoadOwnershipQualifier::Copy:
+    case LoadOwnershipQualifier::Take:
+      requireTrueAndSILOwnership(
+          this, F.hasQualifiedOwnership(),
+          "Load with qualified ownership in an unqualified function");
+      // TODO: Could probably make this a bit stricter.
+      require(!LI->getType().isTrivial(LI->getModule()),
+              "load [copy] or load [take] can only be applied to non-trivial "
+              "types");
+      break;
+    case LoadOwnershipQualifier::Trivial:
+      requireTrueAndSILOwnership(
+          this, F.hasQualifiedOwnership(),
+          "Load with qualified ownership in an unqualified function");
+      require(LI->getType().isTrivial(LI->getModule()),
+              "A load with trivial ownership must load a trivial type");
+      break;
+    }
+  }
+
+  void checkLoadBorrowInst(LoadBorrowInst *LBI) {
+    requireTrueAndSILOwnership(
+        this, F.hasQualifiedOwnership(),
+        "Inst with qualified ownership in a function that is not qualified");
+    require(LBI->getType().isObject(), "Result of load must be an object");
+    require(LBI->getType().isLoadable(LBI->getModule()),
+            "Load must have a loadable type");
+    require(LBI->getOperand()->getType().isAddress(),
+            "Load operand must be an address");
+    require(LBI->getOperand()->getType().getObjectType() == LBI->getType(),
+            "Load operand type and result type mismatch");
+  }
+
+  void checkEndBorrowInst(EndBorrowInst *EBI) {
+    requireTrueAndSILOwnership(
+        this, F.hasQualifiedOwnership(),
+        "Inst with qualified ownership in a function that is not qualified");
+    // We allow for end_borrow to express relationships in between addresses and
+    // values, but we require that the types are the same ignoring value
+    // category.
+    require(EBI->getDest()->getType().getObjectType() ==
+                EBI->getSrc()->getType().getObjectType(),
+            "end_borrow can only relate the same types ignoring value "
+            "category");
   }
 
   void checkStoreInst(StoreInst *SI) {
@@ -1062,6 +1182,33 @@ public:
             "Must store to an address dest");
     require(SI->getDest()->getType().getObjectType() == SI->getSrc()->getType(),
             "Store operand type and dest type mismatch");
+
+    // Perform ownership checks.
+    switch (SI->getOwnershipQualifier()) {
+    case StoreOwnershipQualifier::Unqualified:
+      // We should not see loads with unqualified ownership when SILOwnership is
+      // enabled.
+      requireTrueAndSILOwnership(this, F.hasUnqualifiedOwnership(),
+                                 "Invalid load with unqualified ownership");
+      break;
+    case StoreOwnershipQualifier::Init:
+    case StoreOwnershipQualifier::Assign:
+      requireTrueAndSILOwnership(
+          this, F.hasQualifiedOwnership(),
+          "Inst with qualified ownership in a function that is not qualified");
+      // TODO: Could probably make this a bit stricter.
+      require(!SI->getSrc()->getType().isTrivial(SI->getModule()),
+              "store [init] or store [assign] can only be applied to "
+              "non-trivial types");
+      break;
+    case StoreOwnershipQualifier::Trivial:
+      requireTrueAndSILOwnership(
+          this, F.hasQualifiedOwnership(),
+          "Inst with qualified ownership in a function that is not qualified");
+      require(SI->getSrc()->getType().isTrivial(SI->getModule()),
+              "A store with trivial ownership must store a trivial type");
+      break;
+    }
   }
 
   void checkAssignInst(AssignInst *AI) {
@@ -1201,11 +1348,31 @@ public:
   void checkRetainValueInst(RetainValueInst *I) {
     require(I->getOperand()->getType().isObject(),
             "Source value should be an object value");
+    require(F.hasUnqualifiedOwnership(),
+            "retain_value is only in functions with unqualified ownership");
+  }
+
+  void checkCopyValueInst(CopyValueInst *I) {
+    require(I->getOperand()->getType().isObject(),
+            "Source value should be an object value");
+    require(F.hasQualifiedOwnership(),
+            "copy_value is only valid in functions with qualified "
+            "ownership");
+  }
+
+  void checkDestroyValueInst(DestroyValueInst *I) {
+    require(I->getOperand()->getType().isObject(),
+            "Source value should be an object value");
+    require(F.hasQualifiedOwnership(),
+            "destroy_value is only valid in functions with qualified "
+            "ownership");
   }
 
   void checkReleaseValueInst(ReleaseValueInst *I) {
     require(I->getOperand()->getType().isObject(),
             "Source value should be an object value");
+    require(F.hasUnqualifiedOwnership(),
+            "release_value is only in functions with unqualified ownership");
   }
   
   void checkAutoreleaseValueInst(AutoreleaseValueInst *I) {
@@ -1434,8 +1601,9 @@ public:
       if (auto dynamicSelf = dyn_cast<DynamicSelfType>(formalObjectType)) {
         formalObjectType = dynamicSelf->getSelfType()->getCanonicalType();
       }
-      return ((loweredOptionalKind == formalOptionalKind) &&
-              loweredObjectType == formalObjectType);
+      return loweredOptionalKind == formalOptionalKind &&
+             isLoweringOf(SILType::getPrimitiveAddressType(loweredObjectType),
+                          formalObjectType);
     }
 
     // Metatypes preserve their instance type through lowering.
@@ -1510,9 +1678,13 @@ public:
 
   void checkStrongRetainInst(StrongRetainInst *RI) {
     requireReferenceValue(RI->getOperand(), "Operand of strong_retain");
+    require(F.hasUnqualifiedOwnership(),
+            "strong_retain is only in functions with unqualified ownership");
   }
   void checkStrongReleaseInst(StrongReleaseInst *RI) {
     requireReferenceValue(RI->getOperand(), "Operand of release");
+    require(F.hasUnqualifiedOwnership(),
+            "strong_release is only in functions with unqualified ownership");
   }
   void checkStrongRetainUnownedInst(StrongRetainUnownedInst *RI) {
     auto unownedType = requireObjectType(UnownedStorageType, RI->getOperand(),
@@ -3534,7 +3706,7 @@ void SILModule::verify() const {
       llvm::errs() << "Symbol redefined: " << f.getName() << "!\n";
       assert(false && "triggering standard assertion failure routine");
     }
-    f.verify(/*SingleFunction=*/ false);
+    f.verify(/*SingleFunction=*/false);
   }
 
   // Check all globals.
@@ -3546,15 +3718,27 @@ void SILModule::verify() const {
     g.verify();
   }
 
-  // Check all vtables.
+  // Check all vtables and the vtable cache.
   llvm::DenseSet<ClassDecl*> vtableClasses;
+  unsigned EntriesSZ = 0;
   for (const SILVTable &vt : getVTables()) {
     if (!vtableClasses.insert(vt.getClass()).second) {
       llvm::errs() << "Vtable redefined: " << vt.getClass()->getName() << "!\n";
       assert(false && "triggering standard assertion failure routine");
     }
     vt.verify(*this);
+    // Check if there is a cache entry for each vtable entry
+    for (auto entry : vt.getEntries()) {
+      if (VTableEntryCache.find({&vt, entry.first}) == VTableEntryCache.end()) {
+        llvm::errs() << "Vtable entry for function: " << entry.second->getName()
+                     << "not in cache!\n";
+        assert(false && "triggering standard assertion failure routine");
+      }
+      EntriesSZ++;
+    }
   }
+  assert(EntriesSZ == VTableEntryCache.size() &&
+         "Cache size is not equal to true number of VTable entries");
 
   // Check all witness tables.
   DEBUG(llvm::dbgs() << "*** Checking witness tables for duplicates ***\n");

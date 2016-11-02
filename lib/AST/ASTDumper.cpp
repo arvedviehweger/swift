@@ -90,20 +90,6 @@ void RequirementRepr::dump() const {
   llvm::errs() << "\n";
 }
 
-Optional<std::tuple<StringRef, StringRef, RequirementReprKind>>
-RequirementRepr::getAsAnalyzedWrittenString() const {
-  if (AsWrittenString.empty())
-    return None;
-  auto Pair = AsWrittenString.split("==");
-  auto Kind = RequirementReprKind::SameType;
-  if (Pair.second.empty()) {
-    Pair = AsWrittenString.split(":");
-    Kind =  RequirementReprKind::TypeConstraint;
-  }
-  assert(!Pair.second.empty() && "cannot get second type.");
-  return std::make_tuple(Pair.first.trim(), Pair.second.trim(), Kind);
-}
-
 void RequirementRepr::printImpl(raw_ostream &out, bool AsWritten) const {
   auto printTy = [&](const TypeLoc &TyLoc) {
     if (AsWritten && TyLoc.getTypeRepr()) {
@@ -130,14 +116,6 @@ void RequirementRepr::printImpl(raw_ostream &out, bool AsWritten) const {
 
 void RequirementRepr::print(raw_ostream &out) const {
   printImpl(out, /*AsWritten=*/false);
-}
-
-void RequirementRepr::printAsWritten(raw_ostream &out) const {
-  if (!AsWrittenString.empty()) {
-    out << AsWrittenString;
-  } else {
-    printImpl(out, /*AsWritten=*/true);
-  }
 }
 
 void GenericParamList::print(llvm::raw_ostream &OS) {
@@ -1237,8 +1215,11 @@ public:
       for (auto *Query : C.getAvailability()->getQueries()) {
         OS << '\n';
         switch (Query->getKind()) {
-        case AvailabilitySpecKind::VersionConstraint:
-          cast<VersionConstraintAvailabilitySpec>(Query)->print(OS, Indent + 2);
+        case AvailabilitySpecKind::PlatformVersionConstraint:
+          cast<PlatformVersionConstraintAvailabilitySpec>(Query)->print(OS, Indent + 2);
+          break;
+        case AvailabilitySpecKind::LanguageVersionConstraint:
+          cast<LanguageVersionConstraintAvailabilitySpec>(Query)->print(OS, Indent + 2);
           break;
         case AvailabilitySpecKind::OtherPlatform:
           cast<OtherPlatformAvailabilitySpec>(Query)->print(OS, Indent + 2);
@@ -2081,8 +2062,6 @@ public:
     printClosure(E, "closure_expr");
     if (E->hasSingleExpressionBody())
       OS << " single-expression";
-    if (E->isVoidConversionClosure())
-      OS << " void-conversion";
     
     if (E->getParameters()) {
       OS << '\n';
@@ -2459,9 +2438,9 @@ public:
     OS << ')';
   }
 
-  void visitProtocolCompositionTypeRepr(ProtocolCompositionTypeRepr *T) {
+  void visitCompositionTypeRepr(CompositionTypeRepr *T) {
     printCommon(T, "type_composite");
-    for (auto elem : T->getProtocols()) {
+    for (auto elem : T->getTypes()) {
       OS << '\n';
       printRec(elem);
     }
@@ -2628,6 +2607,15 @@ namespace {
       return OS;
     }
 
+    void dumpParameterFlags(ParameterTypeFlags paramFlags) {
+      if (paramFlags.isVariadic())
+        printFlag("vararg");
+      if (paramFlags.isAutoClosure())
+        printFlag("autoclosure");
+      if (paramFlags.isEscaping())
+        printFlag("escaping");
+    }
+
   public:
     PrintType(raw_ostream &os, unsigned indent) : OS(os), Indent(indent) { }
 
@@ -2652,7 +2640,13 @@ namespace {
       printCommon(T, label, #Name "_type") << ")";              \
     }
 
-    TRIVIAL_TYPE_PRINTER(Error, error)
+    void visitErrorType(ErrorType *T, StringRef label) {
+      printCommon(T, label, "error_type");
+      if (auto originalType = T->getOriginalType())
+        printRec("original_type", originalType);
+      OS << ")";
+    }
+
     TRIVIAL_TYPE_PRINTER(Unresolved, unresolved)
 
     void visitBuiltinIntegerType(BuiltinIntegerType *T, StringRef label) {
@@ -2691,6 +2685,7 @@ namespace {
 
     void visitParenType(ParenType *T, StringRef label) {
       printCommon(T, label, "paren_type");
+      dumpParameterFlags(T->getParameterFlags());
       printRec(T->getUnderlyingType());
       OS << ")";
     }
@@ -2705,9 +2700,7 @@ namespace {
         PrintWithColorRAII(OS, TypeFieldColor) << "tuple_type_elt";
         if (elt.hasName())
           printField("name", elt.getName().str());
-        if (elt.isVararg())
-          printFlag("vararg");
-
+        dumpParameterFlags(elt.getParameterFlags());
         printRec(elt.getType());
         OS << ")";
       }
@@ -2763,22 +2756,25 @@ namespace {
       OS << ")";
     }
 
+    void printMetatypeRepresentation(MetatypeRepresentation representation) {
+      OS << " ";
+      switch (representation) {
+      case MetatypeRepresentation::Thin:
+        OS << "@thin";
+        break;
+      case MetatypeRepresentation::Thick:
+        OS << "@thick";
+        break;
+      case MetatypeRepresentation::ObjC:
+        OS << "@objc";
+        break;
+      }
+    }
+
     void visitMetatypeType(MetatypeType *T, StringRef label) {
       printCommon(T, label, "metatype_type");
-      if (T->hasRepresentation()) {
-        OS << " ";
-        switch (T->getRepresentation()) {
-        case MetatypeRepresentation::Thin:
-          OS << "@thin";
-          break;
-        case MetatypeRepresentation::Thick:
-          OS << "@thick";
-          break;
-        case MetatypeRepresentation::ObjC:
-          OS << "@objc";
-          break;
-        }
-      }
+      if (T->hasRepresentation())
+        printMetatypeRepresentation(T->getRepresentation());
       printRec(T->getInstanceType());
       OS << ")";
     }
@@ -2786,6 +2782,8 @@ namespace {
     void visitExistentialMetatypeType(ExistentialMetatypeType *T,
                                       StringRef label) {
       printCommon(T, label, "existential_metatype_type");
+      if (T->hasRepresentation())
+        printMetatypeRepresentation(T->getRepresentation());
       printRec(T->getInstanceType());
       OS << ")";
     }
@@ -2816,8 +2814,6 @@ namespace {
         printField("parent", static_cast<void *>(parent));
       if (auto assocType = T->getAssocType())
         printField("assoc_type", assocType->printRef());
-      if (auto selfProto = T->getSelfProtocol())
-        printField("self_proto", selfProto->printRef());
 
       // FIXME: This is ugly.
       OS << "\n";
@@ -2915,13 +2911,14 @@ namespace {
       case SILFunctionType::Representation::WitnessMethod:
         printField("representation", "witness_method");
         break;
+
+      case SILFunctionType::Representation::Closure:
+        printField("representation", "closure");
+        break;
       }
 
       printFlag(T->isAutoClosure(), "autoclosure");
-
-      // Dump out either @noescape or @escaping
-      printFlag(!T->isNoEscape(), "@escaping");
-
+      printFlag(!T->isNoEscape(), "escaping");
       printFlag(T->throws(), "throws");
 
       printRec("input", T->getInput());
@@ -3097,4 +3094,7 @@ void GenericEnvironment::dump() const {
     pair.first->dump();
     pair.second->dump();
   }
+  llvm::errs() << "Generic parameters:\n";
+  for (auto paramTy : getGenericParams())
+    paramTy->dump();
 }

@@ -24,6 +24,7 @@
 #include "swift/AST/GenericSignature.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/TypeAlignments.h"
+#include "swift/AST/Witness.h"
 #include "swift/Basic/OptionalEnum.h"
 #include "swift/Basic/Range.h"
 #include "llvm/ADT/DenseMap.h"
@@ -70,7 +71,7 @@ namespace swift {
   class SubscriptDecl;
   class ValueDecl;
   class VarDecl;
-  
+
 enum class DeclKind : uint8_t {
 #define DECL(Id, Parent) Id,
 #define DECL_RANGE(Id, FirstId, LastId) \
@@ -732,10 +733,6 @@ public:
 
   bool walk(ASTWalker &walker);
 
-  /// \brief Should this declaration be treated as if annotated with transparent
-  /// attribute.
-  bool isTransparent() const;
-
   /// \brief Return whether this declaration has been determined invalid.
   bool isInvalid() const { return DeclBits.Invalid; }
   
@@ -1025,20 +1022,6 @@ public:
     return SeparatorLoc;
   }
 
-  /// Set during deserialization; used to print out the requirements accurately
-  /// for the generated interface.
-  StringRef getAsWrittenString() const {
-    return AsWrittenString;
-  }
-  void setAsWrittenString(StringRef Str) {
-    AsWrittenString = Str;
-  }
-
-  /// Further analyze the written string, if it's not empty, to collect the first
-  /// type, the second type and the requirement kind.
-  Optional<std::tuple<StringRef, StringRef, RequirementReprKind>>
-  getAsAnalyzedWrittenString() const;
-
   SourceRange getSourceRange() const {
     return SourceRange(Types[0].getSourceRange().Start,
                        Types[1].getSourceRange().End);
@@ -1048,7 +1031,6 @@ public:
       void dump() const LLVM_ATTRIBUTE_USED,
       "only for use within the debugger");
   void print(raw_ostream &OS) const;
-  void printAsWritten(raw_ostream &OS) const;
 };
   
 /// GenericParamList - A list of generic parameters that is part of a generic
@@ -2420,29 +2402,18 @@ public:
 /// whose common purpose is to anchor the abstract type parameter and specify
 /// requirements for any corresponding type argument.
 class AbstractTypeParamDecl : public TypeDecl {
-  /// The archetype describing this abstract type parameter within its scope.
-  ArchetypeType *Archetype;
-
 protected:
   AbstractTypeParamDecl(DeclKind kind, DeclContext *dc, Identifier name,
                         SourceLoc NameLoc)
-    : TypeDecl(kind, dc, name, NameLoc, { }), Archetype(nullptr) { }
+    : TypeDecl(kind, dc, name, NameLoc, { }) { }
 
 public:
   /// Return the superclass of the generic parameter.
   Type getSuperclass() const;
 
-  /// Retrieve the archetype that describes this abstract type parameter
-  /// within its scope.
-  ArchetypeType *getArchetype() const { return Archetype; }
-
-  /// Set the archetype used to describe this abstract type parameter within
-  /// its scope.
-  void setArchetype(ArchetypeType *archetype) { Archetype = archetype; }
-
   /// Retrieve the set of protocols to which this abstract type
   /// parameter conforms.
-  ArrayRef<ProtocolDecl *> getConformingProtocols(LazyResolver *resolver) const;
+  ArrayRef<ProtocolDecl *> getConformingProtocols() const;
 
   static bool classof(const Decl *D) {
     return D->getKind() >= DeclKind::First_AbstractTypeParamDecl &&
@@ -3294,6 +3265,11 @@ public:
   bool usesObjCGenericsModel() const {
     return isObjC() && hasClangNode() && isGenericContext();
   }
+  
+  /// True if the class is known to be implemented in Swift.
+  bool hasKnownSwiftImplementation() const {
+    return !hasClangNode();
+  }
 };
 
 
@@ -3354,7 +3330,7 @@ class ProtocolDecl : public NominalTypeDecl {
 
   ArrayRef<ProtocolDecl *> InheritedProtocols;
 
-  llvm::DenseMap<ValueDecl *, ConcreteDeclRef> DefaultWitnesses;
+  llvm::DenseMap<ValueDecl *, Witness> DefaultWitnesses;
 
   /// True if the protocol has requirements that cannot be satisfied (e.g.
   /// because they could not be imported from Objective-C).
@@ -3503,10 +3479,10 @@ public:
 
   /// Returns the default witness for a requirement, or nullptr if there is
   /// no default.
-  ConcreteDeclRef getDefaultWitness(ValueDecl *requirement) const;
+  Witness getDefaultWitness(ValueDecl *requirement) const;
 
   /// Record the default witness for a requirement.
-  void setDefaultWitness(ValueDecl *requirement, ConcreteDeclRef witness);
+  void setDefaultWitness(ValueDecl *requirement, Witness witness);
 
   /// Set the list of inherited protocols.
   void setInheritedProtocols(ArrayRef<ProtocolDecl *> protocols) {
@@ -3803,6 +3779,10 @@ protected:
     AbstractStorageDeclBits.Overridden = false;
   }
 public:
+
+  /// \brief Should this declaration be treated as if annotated with transparent
+  /// attribute.
+  bool isTransparent() const;
 
   /// \brief Determine whether this storage is a static member, if it
   /// is a member.  Currently only variables can be static.
@@ -4615,8 +4595,13 @@ protected:
   }
 
   void setGenericParams(GenericParamList *GenericParams);
-  
+
 public:
+
+  /// \brief Should this declaration be treated as if annotated with transparent
+  /// attribute.
+  bool isTransparent() const;
+
   void setGenericSignature(GenericSignature *GenericSig) {
     assert(!this->GenericSig && "already have signature?");
     this->GenericSig = GenericSig;

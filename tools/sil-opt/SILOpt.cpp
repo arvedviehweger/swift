@@ -72,6 +72,10 @@ EnableResilience("enable-resilience",
                                 "interfaces for all public declarations by "
                                 "default"));
 
+static llvm::cl::opt<bool>
+EnableSILOwnershipOpt("enable-sil-ownership",
+                 llvm::cl::desc("Compile the module with sil-ownership initially enabled for all functions"));
+
 static llvm::cl::opt<std::string>
 ResourceDir("resource-dir",
     llvm::cl::desc("The directory that holds the compiler resource files"));
@@ -160,6 +164,11 @@ ASTVerifierProcessId("ast-verifier-process-id", llvm::cl::Hidden,
 static llvm::cl::opt<bool>
 PerformWMO("wmo", llvm::cl::desc("Enable whole-module optimizations"));
 
+static llvm::cl::opt<bool>
+AssumeUnqualifiedOwnershipWhenParsing(
+    "assume-parsing-unqualified-ownership-sil", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Assume all parsed functions have unqualified ownership"));
+
 static void runCommandLineSelectedPasses(SILModule *Module) {
   SILPassManager PM(Module);
 
@@ -227,7 +236,9 @@ int main(int argc, char **argv) {
   SILOpts.AssertConfig = AssertConfId;
   if (OptimizationGroup != OptGroup::Diagnostics)
     SILOpts.Optimization = SILOptions::SILOptMode::Optimize;
-
+  SILOpts.EnableSILOwnership = EnableSILOwnershipOpt;
+  SILOpts.AssumeUnqualifiedOwnershipWhenParsing =
+    AssumeUnqualifiedOwnershipWhenParsing;
 
   // Load the input file.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileBufOrErr =

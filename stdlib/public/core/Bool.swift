@@ -26,7 +26,7 @@
 ///     print(containsTen)
 ///     // Prints "false"
 ///
-///     let (a, b) == (100, 101)
+///     let (a, b) = (100, 101)
 ///     let aFirst = a < b
 ///     print(aFirst)
 ///     // Prints "true"
@@ -126,7 +126,6 @@ extension Bool : CustomStringConvertible {
 public // COMPILER_INTRINSIC
 func _getBool(_ v: Builtin.Int1) -> Bool { return Bool(v) }
 
-@_transparent
 extension Bool : Equatable, Hashable {
   /// The hash value for the Boolean value.
   ///
@@ -136,6 +135,7 @@ extension Bool : Equatable, Hashable {
   ///   invocations of the same program. Do not persist the hash value across
   ///   program runs.
   /// - SeeAlso: `Hashable`
+  @_transparent
   public var hashValue: Int {
     return self ? 1 : 0
   }
@@ -242,7 +242,7 @@ extension Bool {
   ///     } else {
   ///         print("Major error: \(error)")
   ///     }
-  ///     // Prints "No major errors detected")
+  ///     // Prints "No major errors detected"
   ///
   /// In this example, `lhs` tests whether `error` is an empty string.
   /// Evaluation of the `||` operator is one of the following:

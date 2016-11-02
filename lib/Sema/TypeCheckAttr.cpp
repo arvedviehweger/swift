@@ -57,6 +57,7 @@ public:
   IGNORED_ATTR(FixedLayout)
   IGNORED_ATTR(Infix)
   IGNORED_ATTR(Inline)
+  IGNORED_ATTR(Inlineable)
   IGNORED_ATTR(NSApplicationMain)
   IGNORED_ATTR(NSCopying)
   IGNORED_ATTR(NonObjC)
@@ -155,15 +156,6 @@ public:
     TC.checkNoEscapeAttr(cast<ParamDecl>(D), attr);
   }
 
-  void visitEscapingAttr(EscapingAttr *attr) {
-    auto *PD = cast<ParamDecl>(D);
-    auto *FTy = PD->getType()->getAs<FunctionType>();
-    if (FTy == 0) {
-      TC.diagnose(attr->getLocation(), diag::escaping_function_type);
-      attr->setInvalid();
-    }
-  }
-
   void visitTransparentAttr(TransparentAttr *attr);
   void visitMutationAttr(DeclAttribute *attr);
   void visitMutatingAttr(MutatingAttr *attr) { visitMutationAttr(attr); }
@@ -228,15 +220,6 @@ public:
 } // end anonymous namespace
 
 void AttributeEarlyChecker::visitTransparentAttr(TransparentAttr *attr) {
-  if (auto *ED = dyn_cast<ExtensionDecl>(D)) {
-    CanType ExtendedTy = ED->getExtendedType()->getCanonicalType();
-    const NominalTypeDecl *ExtendedNominal = ExtendedTy->getAnyNominal();
-    // Only Struct and Enum extensions can be transparent.
-    if (!isa<StructDecl>(ExtendedNominal) && !isa<EnumDecl>(ExtendedNominal))
-      return diagnoseAndRemoveAttr(attr,diag::transparent_on_invalid_extension);
-    return;
-  }
-  
   DeclContext *Ctx = D->getDeclContext();
   // Protocol declarations cannot be transparent.
   if (isa<ProtocolDecl>(Ctx))
@@ -706,18 +689,18 @@ public:
 
     IGNORED_ATTR(AutoClosure)
     IGNORED_ATTR(Alignment)
-    IGNORED_ATTR(SILGenName)
-    IGNORED_ATTR(Dynamic)
-    IGNORED_ATTR(Exported)
     IGNORED_ATTR(Convenience)
+    IGNORED_ATTR(Dynamic)
+    IGNORED_ATTR(Effects)
+    IGNORED_ATTR(Exported)
+    IGNORED_ATTR(FixedLayout)
     IGNORED_ATTR(GKInspectable)
     IGNORED_ATTR(IBDesignable)
     IGNORED_ATTR(IBInspectable)
     IGNORED_ATTR(IBOutlet) // checked early.
     IGNORED_ATTR(Indirect)
     IGNORED_ATTR(Inline)
-    IGNORED_ATTR(Effects)
-    IGNORED_ATTR(FixedLayout)
+    IGNORED_ATTR(Inlineable)
     IGNORED_ATTR(Lazy)      // checked early.
     IGNORED_ATTR(LLDBDebuggerFunction)
     IGNORED_ATTR(Mutating)
@@ -734,6 +717,7 @@ public:
     IGNORED_ATTR(Override)
     IGNORED_ATTR(RawDocComment)
     IGNORED_ATTR(Semantics)
+    IGNORED_ATTR(SILGenName)
     IGNORED_ATTR(Transparent)
     IGNORED_ATTR(SynthesizedProtocol)
     IGNORED_ATTR(RequiresStoredPropertyInits)
@@ -742,7 +726,6 @@ public:
     IGNORED_ATTR(WarnUnqualifiedAccess)
     IGNORED_ATTR(ShowInInterface)
     IGNORED_ATTR(DiscardableResult)
-    IGNORED_ATTR(Escaping)
 
     // FIXME: We actually do have things to enforce for versioned API.
     IGNORED_ATTR(Versioned)
@@ -1287,7 +1270,7 @@ void AttributeChecker::visitRequiredAttr(RequiredAttr *attr) {
       return;
     }
   } else {
-    if (!parentTy->is<ErrorType>()) {
+    if (!parentTy->hasError()) {
       TC.diagnose(ctor, diag::required_initializer_nonclass, parentTy)
         .highlight(attr->getLocation());
     }
@@ -1312,7 +1295,7 @@ static bool hasThrowingFunctionParameter(CanType type) {
   }
 
   // Suppress diagnostics in the presence of errors.
-  if (isa<ErrorType>(type)) {
+  if (type->hasError()) {
     return true;
   }
 
@@ -1441,7 +1424,7 @@ void AttributeChecker::visitSpecializeAttr(SpecializeAttr *attr) {
     auto &tl = attr->getTypeLocs()[paramIdx];
 
     auto ty = TC.resolveType(tl.getTypeRepr(), DC, None);
-    if (ty && !ty->is<ErrorType>()) {
+    if (ty && !ty->hasError()) {
       if (ty->getCanonicalType()->hasArchetype()) {
         TC.diagnose(attr->getLocation(),
                     diag::cannot_partially_specialize_generic_function);

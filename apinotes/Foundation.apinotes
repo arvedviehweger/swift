@@ -157,7 +157,7 @@ Classes:
   Methods:
   - Selector: 'notificationCenterForType:'
     MethodKind: Class
-    FactoryAsInit: C
+    SwiftName: 'forType(_:)'
 - Name: NSHTTPCookie
   SwiftName: HTTPCookie
 - Name: NSHTTPCookieStorage
@@ -209,10 +209,6 @@ Classes:
 - Name: NSProcessInfo
   SwiftName: ProcessInfo
   Methods:
-  - Selector: processInfo
-    MethodKind: Class
-    NullabilityOfRet: N
-    FactoryAsInit: C
   - Selector: 'isOperatingSystemAtLeastVersion:'
     SwiftName: isOperatingSystemAtLeast(_:)
     MethodKind: Instance
@@ -663,6 +659,9 @@ Classes:
   - Selector: 'URLForPublishingUbiquitousItemAtURL:expirationDate:error:'
     SwiftName: url(forPublishingUbiquitousItemAt:expiration:)
     MethodKind: Instance
+  - Selector: 'enumeratorAtURL:includingPropertiesForKeys:options:errorHandler:'
+    MethodKind: Instance
+    SwiftPrivate: true
 - Name: NSFileVersion
   Methods:
   - Selector: 'versionOfItemAtURL:forPersistentIdentifier:'

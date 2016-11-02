@@ -184,7 +184,7 @@ public:
   SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
                 SmallVectorImpl<SILInstruction *> *insertedInsts);
   SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
-                SILInstruction *insertInst);
+                SILBasicBlock::iterator insertInst);
 
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB)
       : SILGenBuilder(gen, &*insertBB) {}
@@ -193,10 +193,12 @@ public:
       : SILGenBuilder(gen, &*insertBB, insertedInsts) {}
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
                 SILInstruction *insertInst)
-      : SILGenBuilder(gen, &*insertBB, insertInst) {}
+      : SILGenBuilder(gen, &*insertBB, insertInst->getIterator()) {}
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
                 SILBasicBlock::iterator insertInst)
-      : SILGenBuilder(gen, &*insertBB, &*insertInst) {}
+      : SILGenBuilder(gen, &*insertBB, insertInst) {}
+
+  SILGenModule &getSILGenModule() const { return SGM; }
 
   // Metatype instructions use the conformances necessary to instantiate the
   // type.
@@ -319,7 +321,7 @@ public:
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
-  SILBasicBlock *StartOfPostmatter = nullptr;
+  SILFunction::iterator StartOfPostmatter;
 
   /// The current section of the function that we're emitting code in.
   ///
@@ -328,12 +330,12 @@ public:
   /// normal code sequence.
   ///
   /// If the current function section is Ordinary, and
-  /// StartOfPostmatter is non-null, the current insertion block
-  /// should be ordered before that.
-  ///  
+  /// StartOfPostmatter does not point to the function end, the current
+  /// insertion block should be ordered before that.
+  ///
   /// If the current function section is Postmatter, StartOfPostmatter
-  /// is non-null and the current insertion block is ordered after
-  /// that (inclusive).
+  /// does not point to the function end and the current insertion block is
+  /// ordered after that (inclusive).
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
@@ -709,14 +711,18 @@ public:
   //===--------------------------------------------------------------------===//
   // Memory management
   //===--------------------------------------------------------------------===//
-  
+
+  /// Emit debug info for the artificial error inout argument.
+  void emitErrorArgument(SILLocation Loc, unsigned ArgNo);
+
   /// emitProlog - Generates prolog code to allocate and clean up mutable
   /// storage for closure captures and local arguments.
   void emitProlog(AnyFunctionRef TheClosure,
-                  ArrayRef<ParameterList*> paramPatterns, Type resultType);
+                  ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                  bool throws);
   /// returns the number of variables in paramPatterns.
-  unsigned emitProlog(ArrayRef<ParameterList*> paramPatterns,
-                      Type resultType, DeclContext *DeclCtx);
+  unsigned emitProlog(ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                      DeclContext *DeclCtx, bool throws);
 
   /// Create SILArguments in the entry block that bind all the values
   /// of the given pattern suitably for being forwarded.
@@ -1122,6 +1128,9 @@ public:
                                 SILValue buffer, SILValue callbackStorage);
   bool maybeEmitMaterializeForSetThunk(ProtocolConformance *conformance,
                                        SILLinkage linkage,
+                                       Type selfInterfaceType,
+                                       Type selfType,
+                                       GenericEnvironment *genericEnv,
                                        FuncDecl *requirement,
                                        FuncDecl *witness,
                                        ArrayRef<Substitution> witnessSubs);
@@ -1202,6 +1211,12 @@ public:
   SILValue emitMetatypeOfValue(SILLocation loc, Expr *baseExpr);
   
   void emitReturnExpr(SILLocation loc, Expr *ret);
+
+  RValue emitAnyHashableErasure(SILLocation loc,
+                                ManagedValue value,
+                                Type type,
+                                ProtocolConformanceRef conformance,
+                                SGFContext C);
 
   /// Turn a consumable managed value into a +1 managed value.
   ManagedValue getManagedValue(SILLocation loc,
@@ -1624,7 +1639,8 @@ public:
     : SGF(SGF), SavedIP(SGF.B.getInsertionBB()),
       SavedSection(SGF.CurFunctionSection) {
     FunctionSection section = (optSection ? *optSection : SavedSection);
-    assert((section != FunctionSection::Postmatter || SGF.StartOfPostmatter) &&
+    assert((section != FunctionSection::Postmatter ||
+            SGF.StartOfPostmatter != SGF.F.end()) &&
            "trying to move to postmatter without a registered start "
            "of postmatter?");
 

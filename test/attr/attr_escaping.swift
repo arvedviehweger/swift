@@ -1,6 +1,7 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-parse-verify-swift -swift-version 4
 
-@escaping var fn : () -> Int = { 4 }  // expected-error {{@escaping may only be used on 'parameter' declarations}} {{1-11=}}
+@escaping var fn : () -> Int = { 4 }  // expected-error {{attribute can only be applied to types, not declarations}}
+func paramDeclEscaping(@escaping fn: (Int) -> Void) {} // expected-error {{attribute can only be applied to types, not declarations}}
 
 func wrongParamType(a: @escaping Int) {} // expected-error {{@escaping attribute only applies to function types}}
 
@@ -139,6 +140,21 @@ func takesVarargsOfFunctions(fns: () -> ()...) {
   }
 }
 
+func takesVarargsOfFunctionsExplicitEscaping(fns: @escaping () -> ()...) {} // expected-error{{@escaping attribute may only be used in function parameter position}}
+
 func takesNoEscapeFunction(fn: () -> ()) { // expected-note {{parameter 'fn' is implicitly non-escaping}}
   takesVarargsOfFunctions(fns: fn) // expected-error {{passing non-escaping parameter 'fn' to function expecting an @escaping closure}}
+}
+
+
+class FooClass {
+  var stored : Optional<(()->Int)->Void> = nil
+  var computed : (()->Int)->Void {
+    get { return stored! }
+    set(newValue) { stored = newValue } // ok
+  }
+  var computedEscaping : (@escaping ()->Int)->Void {
+    get { return stored! }
+    set(newValue) { stored = newValue } // expected-error{{cannot assign value of type '(@escaping () -> Int) -> Void' to type 'Optional<(() -> Int) -> Void>' (aka 'Optional<(() -> Int) -> ()>')}}
+  }
 }

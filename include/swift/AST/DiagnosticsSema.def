@@ -12,7 +12,7 @@
 //
 //  This file defines diagnostics emitted during semantic analysis and type
 //  checking.
-//  Each diagnostic is described using one of three kinds (error, warning, or 
+//  Each diagnostic is described using one of three kinds (error, warning, or
 //  note) along with a unique identifier, category, options, and text, and is
 //  followed by a signature describing the diagnostic argument kinds.
 //
@@ -340,6 +340,9 @@ ERROR(cannot_convert_closure_result_protocol,none,
 ERROR(cannot_convert_closure_result_nil,none,
       "nil is not compatible with closure result type %0", (Type))
 
+ERROR(destructor_not_accessible,none,
+      "deinitializers cannot be accessed", ())
+
 // Array Element
 ERROR(cannot_convert_array_element,none,
       "cannot convert value of type %0 to expected element type %1",
@@ -547,6 +550,9 @@ ERROR(invalid_member_type,none,
 ERROR(invalid_member_type_suggest,none,
       "%0 does not have a member type named %1; did you mean %2?",
       (Type, Identifier, Identifier))
+ERROR(invalid_member_reference,none,
+      "%0 %1 is not a member type of %2",
+      (DescriptiveDeclKind, Identifier, Type))
 ERROR(invalid_member_type_alias,none,
       "typealias %0 is too complex to be used as a generic constraint; "
       "use an associatedtype instead", (Identifier))
@@ -924,8 +930,6 @@ ERROR(static_functions_not_mutating,none,
 
 ERROR(transparent_stored_property,none,
       "@_transparent cannot be applied to stored properties", ())
-ERROR(transparent_on_invalid_extension,none,
-      "@_transparent is only supported on struct and enum extensions", ())
 ERROR(transparent_in_protocols_not_supported,none,
       "@_transparent is not supported on declarations within protocols", ())
 ERROR(transparent_in_classes_not_supported,none,
@@ -1033,7 +1037,7 @@ ERROR(optional_attribute_non_protocol,none,
 ERROR(optional_attribute_non_objc_protocol,none,
       "'optional' can only be applied to members of an @objc protocol", ())
 ERROR(optional_attribute_missing_explicit_objc,none,
-      "'optional' requirements are an Objective-C compatibility feature; add '@objc'", 
+      "'optional' requirements are an Objective-C compatibility feature; add '@objc'",
       ())
 ERROR(optional_attribute_initializer,none,
       "'optional' cannot be applied to an initializer", ())
@@ -1045,11 +1049,11 @@ ERROR(missing_in_class_init_1,none,
       "@NSManaged}1", (Identifier, bool))
 ERROR(missing_in_class_init_2,none,
       "stored properties %0 and %1 require initial values%select{| or should "
-      "be @NSManaged}2", 
+      "be @NSManaged}2",
       (Identifier, Identifier, bool))
 ERROR(missing_in_class_init_3plus,none,
       "stored properties %0, %1, %select{and %2|%2, and others}3 "
-      "require initial values%select{| or should be @NSManaged}4", 
+      "require initial values%select{| or should be @NSManaged}4",
       (Identifier, Identifier, Identifier, bool, bool))
 NOTE(requires_stored_property_inits_here,none,
      "%select{superclass|class}1 %0 requires all stored properties to have "
@@ -1294,12 +1298,12 @@ ERROR(witness_argument_name_mismatch,none,
       "required by protocol %2 (%3)", (bool, DeclName, Type, DeclName))
 ERROR(witness_initializer_not_required,none,
       "initializer requirement %0 can only be satisfied by a `required` "
-      "initializer in%select{| the definition of}1 non-final class %2", 
+      "initializer in%select{| the definition of}1 non-final class %2",
       (DeclName, bool, Type))
 ERROR(witness_initializer_failability,none,
       "non-failable initializer requirement %0"
       "%select{| in Objective-C protocol}1 cannot be satisfied by a "
-      "failable initializer ('init%select{?|!}1')", 
+      "failable initializer ('init%select{?|!}1')",
       (DeclName, bool))
 ERROR(witness_self_non_subtype,none,
       "protocol %0 requirement %1 cannot be satisfied by a non-final class "
@@ -1499,10 +1503,13 @@ ERROR(circular_protocol_def,none,
       "circular protocol inheritance %0", (StringRef))
 NOTE(protocol_here,none,
      "protocol %0 declared here", (Identifier))
-ERROR(protocol_composition_not_protocol,none, 
+ERROR(protocol_composition_not_protocol,none,
       "non-protocol type %0 cannot be used within a protocol composition", (Type))
 ERROR(objc_protocol_inherits_non_objc_protocol,none,
       "@objc protocol %0 cannot refine non-@objc protocol %1", (Type, Type))
+WARNING(protocol_composition_with_postfix,none,
+        "protocol composition with postfix '%0' is ambiguous "
+        "and will be rejected in future version of Swift", (StringRef))
 
 ERROR(requires_conformance_nonprotocol,none,
       "type %0 constrained to non-protocol type %1", (TypeLoc, TypeLoc))
@@ -1897,6 +1904,8 @@ ERROR(property_behavior_invalid_parameter,none,
       "parameter expression provided, but property behavior %0 does not "
       "use it",
       (Identifier))
+ERROR(property_behavior_conformance_broken,none,
+      "property behavior for %0 in type %1 is broken", (DeclName, Type))
 
 //------------------------------------------------------------------------------
 // Type Check Attributes
@@ -1950,8 +1959,6 @@ ERROR(noescape_implied_by_autoclosure,none,
 ERROR(noescape_conflicts_escaping_autoclosure,none,
       "@noescape conflicts with @autoclosure(escaping)", ())
 
-ERROR(escaping_function_type,none,
-      "@escaping may only be applied to parameters of function type", ())
 ERROR(escaping_non_function_parameter,none,
       "@escaping attribute may only be used in function parameter position", ())
 
@@ -2013,7 +2020,7 @@ NOTE(attr_ApplicationMain_script_here,none,
 #undef SELECT_APPLICATION_MAIN
 #undef SELECT_APPLICATION_DELEGATE
 
-// lazy 
+// lazy
 ERROR(lazy_not_on_let,none,
       "'lazy' cannot be used on a let", ())
 ERROR(lazy_not_on_computed,none,
@@ -2127,7 +2134,7 @@ ERROR(dynamic_construct_class,none,
       "constructing an object of class type %0 with a metatype value must use "
       "a 'required' initializer", (Type))
 NOTE(note_nonrequired_initializer,none,
-      "selected %select{non-required|implicit}0 initializer %1", 
+      "selected %select{non-required|implicit}0 initializer %1",
      (bool, DeclName))
 ERROR(construct_protocol_value,none,
       "value of type %0 is a protocol; it cannot be instantiated",
@@ -2411,6 +2418,12 @@ NOTE(force_optional_to_any,none,
      "force-unwrap the value to avoid this warning", ())
 NOTE(silence_optional_to_any,none,
      "explicitly cast to Any with 'as Any' to silence this warning", ())
+WARNING(optional_in_string_interpolation_segment,none,
+        "string interpolation produces a debug description for an optional "
+        "value; did you mean to make this explicit?",
+        ())
+NOTE(silence_optional_in_interpolation_segment_call,none,
+     "use 'String(describing:)' to silence this warning", ())
 
 ERROR(invalid_noescape_use,none,
       "non-escaping %select{value|parameter}1 %0 may only be called",
@@ -2808,7 +2821,7 @@ ERROR(sil_metatype_without_repr,none,
       "metatypes in SIL must have @thin, @thick, or @objc_metatype attribute",
       ())
 ERROR(sil_metatype_multiple_reprs,none,
-      "metatypes in SIL can only be one of @thin, @thick, or @objc_metatype", 
+      "metatypes in SIL can only be one of @thin, @thick, or @objc_metatype",
       ())
 
 //------------------------------------------------------------------------------
@@ -3104,6 +3117,10 @@ ERROR(availability_decl_unavailable_in_swift_msg, none,
 NOTE(availability_marked_unavailable, none,
   "%0 has been explicitly marked unavailable here", (DeclName))
 
+NOTE(availability_introduced_in_swift, none,
+     "%0 was introduced in Swift %1",
+    (DeclName, clang::VersionTuple))
+
 NOTE(availability_obsoleted, none,
      "%0 was obsoleted in %1 %2",
     (DeclName, StringRef, clang::VersionTuple))
@@ -3216,7 +3233,7 @@ WARNING(variable_never_read, none,
         (Identifier, unsigned))
 
 WARNING(extraneous_default_args_in_call, none,
-        "call to %0 has extraneous arguments that could use defaults", 
+        "call to %0 has extraneous arguments that could use defaults",
         (DeclName))
 
 //------------------------------------------------------------------------------

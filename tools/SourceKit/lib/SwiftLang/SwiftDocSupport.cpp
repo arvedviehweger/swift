@@ -246,34 +246,43 @@ struct SourceTextInfo {
 }
 
 static void initDocGenericParams(const Decl *D, DocEntityInfo &Info) {
-  GenericParamList *GenParams = nullptr;
-  if (auto *NTD = dyn_cast<NominalTypeDecl>(D)) {
-    GenParams = NTD->getGenericParams();
-  } else if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D)) {
-    GenParams = AFD->getGenericParams();
-  } else if (auto *ExtD = dyn_cast<ExtensionDecl>(D)) {
-    GenParams = ExtD->getGenericParams();
-  }
-
-  if (!GenParams)
+  auto *DC = dyn_cast<DeclContext>(D);
+  if (DC == nullptr || !DC->isInnermostContextGeneric())
     return;
 
-  for (auto *GP : GenParams->getParams()) {
-    if (GP->isImplicit())
+  GenericSignature *GenericSig = DC->getGenericSignatureOfContext();
+
+  if (!GenericSig)
+    return;
+
+  // FIXME: Not right for extensions of nested generic types
+  for (auto *GP : GenericSig->getInnermostGenericParams()) {
+    if (GP->getDecl()->isImplicit())
       continue;
     DocGenericParam Param;
-    Param.Name = GP->getNameStr();
-    if (!GP->getInherited().empty()) {
-      llvm::raw_string_ostream OS(Param.Inherits);
-      GP->getInherited()[0].getType().print(OS);
-    }
-
+    Param.Name = GP->getName().str();
     Info.GenericParams.push_back(Param);
   }
-  for (auto &Req : GenParams->getRequirements()) {
+
+  ProtocolDecl *proto = nullptr;
+  if (auto *typeDC = DC->getInnermostTypeContext())
+    proto = typeDC->getAsProtocolOrProtocolExtensionContext();
+
+  for (auto &Req : GenericSig->getRequirements()) {
+    if (Req.getKind() == RequirementKind::WitnessMarker)
+      continue;
+
+    // Skip protocol Self requirement.
+    if (proto &&
+        Req.getKind() == RequirementKind::Conformance &&
+        Req.getFirstType()->isEqual(proto->getSelfInterfaceType()) &&
+        Req.getSecondType()->getAnyNominal() == proto)
+      continue;
+
     std::string ReqStr;
+    PrintOptions Opts;
     llvm::raw_string_ostream OS(ReqStr);
-    Req.printAsWritten(OS);
+    Req.print(OS, Opts);
     OS.flush();
     Info.GenericRequirements.push_back(std::move(ReqStr));
   }
@@ -494,6 +503,25 @@ static void reportRelated(ASTContext &Ctx,
   }
 }
 
+static ArrayRef<const DeclAttribute*>
+getDeclAttributes(const Decl *D, std::vector<const DeclAttribute*> &Scratch) {
+  for (auto Attr : D->getAttrs()) {
+    Scratch.push_back(Attr);
+  }
+  // For enum elements, inherit their parent enum decls' deprecated attributes.
+  if (auto *DE = dyn_cast<EnumElementDecl>(D)) {
+    for (auto Attr : DE->getParentEnum()->getAttrs()) {
+      if (auto Avail = dyn_cast<AvailableAttr>(Attr)) {
+        if (Avail->Deprecated || Avail->isUnconditionallyDeprecated()) {
+          Scratch.push_back(Attr);
+        }
+      }
+    }
+  }
+
+  return llvm::makeArrayRef(Scratch);
+}
+
 // Only reports @available.
 // FIXME: Handle all attributes.
 static void reportAttributes(ASTContext &Ctx,
@@ -508,8 +536,9 @@ static void reportAttributes(ASTContext &Ctx,
   static UIdent PlatformOSXAppExt("source.availability.platform.osx_app_extension");
   static UIdent PlatformtvOSAppExt("source.availability.platform.tvos_app_extension");
   static UIdent PlatformWatchOSAppExt("source.availability.platform.watchos_app_extension");
+  std::vector<const DeclAttribute*> Scratch;
 
-  for (auto Attr : D->getAttrs()) {
+  for (auto Attr : getDeclAttributes(D, Scratch)) {
     if (auto Av = dyn_cast<AvailableAttr>(Attr)) {
       UIdent PlatformUID;
       switch (Av->Platform) {

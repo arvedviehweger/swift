@@ -743,10 +743,10 @@ ParserResult<Expr> Parser::parseExprSuper(bool isExprBasic) {
                                             /*Implicit=*/false))
     : cast<Expr>(new (Context) ErrorExpr(superLoc));
   
-  if (Tok.is(tok::period)) {
+  if (Tok.isAny(tok::period, tok::period_prefix)) {
     // 'super.' must be followed by a member or initializer ref.
 
-    SourceLoc dotLoc = consumeToken(tok::period);
+    SourceLoc dotLoc = consumeToken();
     
     if (Tok.is(tok::code_complete)) {
       if (CodeCompletion) {
@@ -858,8 +858,11 @@ static bool isStartOfGetSetAccessor(Parser &P) {
   P.consumeToken(tok::l_brace);
 
   // Eat attributes, if present.
-  if (!P.canParseAttributes())
-    return false;
+  while (P.consumeIf(tok::at_sign)) {
+    if (!P.consumeIf(tok::identifier)) return false;
+    // Eat paren after attribute name; e.g. @foo(x)
+    if (P.Tok.is(tok::l_paren)) P.skipSingle();
+  }
 
   // Check if we have 'didSet'/'willSet' after attributes.
   return P.Tok.isContextualKeyword("didSet") ||
@@ -1426,8 +1429,9 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
         SourceLoc nameLoc = consumeToken(tok::integer_literal);
         
         // Don't allow '.<integer literal>' following a numeric literal
-        // expression.
-        if (Result.isNonNull() && isa<NumberLiteralExpr>(Result.get())) {
+        // expression (unless in #if env, for 1.2.3.4 version numbers)
+        if (!InPoundIfEnvironment &&
+            Result.isNonNull() && isa<NumberLiteralExpr>(Result.get())) {
           diagnose(nameLoc, diag::numeric_literal_numeric_member)
             .highlight(Result.get()->getSourceRange());
           continue;
@@ -1449,9 +1453,8 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
 
       // Handle the deprecated 'x.dynamicType' and migrate it to `type(of: x)`
       if (Tok.getText() == "dynamicType") {
-        BacktrackingScope backtrackScope(*this);
         auto range = Result.get()->getSourceRange();
-        auto dynamicTypeExprRange = SourceRange(TokLoc, consumeToken());
+        auto dynamicTypeExprRange = SourceRange(TokLoc, Tok.getLoc());
         diagnose(TokLoc, diag::expr_dynamictype_deprecated)
           .highlight(dynamicTypeExprRange)
           .fixItReplace(dynamicTypeExprRange, ")")
@@ -2966,7 +2969,8 @@ void Parser::addParametersToScope(ParameterList *PL) {
 ///
 ///  availability-spec:
 ///     '*'
-///     version-constraint-spec
+///     language-version-constraint-spec
+///     platform-version-constraint-spec
 ParserResult<AvailabilitySpec> Parser::parseAvailabilitySpec() {
   if (Tok.isBinaryOperator() && Tok.getText() == "*") {
     SourceLoc StarLoc = Tok.getLoc();
@@ -2974,15 +2978,42 @@ ParserResult<AvailabilitySpec> Parser::parseAvailabilitySpec() {
 
     return makeParserResult(new (Context) OtherPlatformAvailabilitySpec(StarLoc));
   }
-  return parseVersionConstraintSpec();
+  if (Tok.isIdentifierOrUnderscore() && Tok.getText() == "swift") {
+    return parseLanguageVersionConstraintSpec();
+  }
+
+  return parsePlatformVersionConstraintSpec();
 }
 
-/// Parse version constraint specification.
+/// Parse language-version constraint specification.
 ///
-///  version-constraint-spec:
+///  language-version-constraint-spec:
+///     "swift" version-tuple
+ParserResult<LanguageVersionConstraintAvailabilitySpec>
+Parser::parseLanguageVersionConstraintSpec() {
+  SourceLoc SwiftLoc;
+  clang::VersionTuple Version;
+  SourceRange VersionRange;
+  if (!(Tok.isIdentifierOrUnderscore() && Tok.getText() == "swift"))
+    return nullptr;
+
+  SwiftLoc = Tok.getLoc();
+  consumeToken();
+  if (parseVersionTuple(Version, VersionRange,
+                        diag::avail_query_expected_version_number)) {
+    return nullptr;
+  }
+  return makeParserResult(new (Context)
+                          LanguageVersionConstraintAvailabilitySpec(
+                            SwiftLoc, Version, VersionRange));
+}
+
+/// Parse platform-version constraint specification.
+///
+///  platform-version-constraint-spec:
 ///     identifier version-comparison version-tuple
-ParserResult<VersionConstraintAvailabilitySpec>
-Parser::parseVersionConstraintSpec() {
+ParserResult<PlatformVersionConstraintAvailabilitySpec>
+Parser::parsePlatformVersionConstraintSpec() {
   Identifier PlatformIdentifier;
   SourceLoc PlatformLoc;
   if (Tok.is(tok::code_complete)) {
@@ -3021,7 +3052,7 @@ Parser::parseVersionConstraintSpec() {
     return nullptr;
   }
 
-  return makeParserResult(new (Context) VersionConstraintAvailabilitySpec(
+  return makeParserResult(new (Context) PlatformVersionConstraintAvailabilitySpec(
       Platform.getValue(), PlatformLoc, Version, VersionRange));
 }
 

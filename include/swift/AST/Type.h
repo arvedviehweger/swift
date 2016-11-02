@@ -54,14 +54,16 @@ typedef llvm::DenseMap<TypeBase *, Type> TypeSubstitutionMap;
 /// Flags that can be passed when substituting into a type.
 enum class SubstFlags {
   /// If a type cannot be produced because some member type is
-  /// missing, return the identity type rather than a null type.
-  IgnoreMissing = 0x01,
+  /// missing, place an 'error' type into the position of the base.
+  UseErrorType = 0x01,
   /// Allow substitutions to recurse into SILFunctionTypes.
   /// Normally, SILType::subst() should be used for lowered
   /// types, however in special cases where the substitution
   /// is just changing between contextual and interface type
   /// representations, using Type::subst() is allowed.
   AllowLoweredTypes = 0x02,
+  /// Map member types to their desugared witness type.
+  DesugarMemberTypes = 0x04,
 };
 
 /// Options for performing substitutions into a type.
@@ -170,7 +172,7 @@ public:
   /// \returns the substituted type, or a null type if an error occurred.
   Type subst(ModuleDecl *module,
              const TypeSubstitutionMap &substitutions,
-             SubstOptions options) const;
+             SubstOptions options = None) const;
 
   /// Replace references to substitutable types with new, concrete types and
   /// return the substituted result.
@@ -182,7 +184,7 @@ public:
   ///
   /// \returns the substituted type, or a null type if an error occurred.
   Type subst(const SubstitutionMap &substitutions,
-             SubstOptions options) const;
+             SubstOptions options = None) const;
 
   bool isPrivateStdlibType(bool whitelistProtocols=true) const;
 
@@ -536,6 +538,19 @@ namespace llvm {
       return swift::CanType((swift::TypeBase*)P);
     }
   };
+
+  template<>
+  class PointerLikeTypeTraits<swift::CanGenericSignature> {
+  public:
+    static inline swift::CanGenericSignature getFromVoidPointer(void *P) {
+      return swift::CanGenericSignature((swift::GenericSignature*)P);
+    }
+    static inline void *getAsVoidPointer(swift::CanGenericSignature S) {
+      return (void*)S.getPointer();
+    }
+    enum { NumLowBitsAvailable = swift::TypeAlignInBits };
+  };
+  
 } // end namespace llvm
 
 #endif

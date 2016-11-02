@@ -78,7 +78,7 @@ protected:
   void visit##CLASS(CLASS *I) {                                       \
     llvm_unreachable("SILCloner visiting non-instruction?");          \
   }
-#define INST(CLASS, PARENT, MEMBEHAVIOR, RELEASINGBEHAVIOR) \
+#define INST(CLASS, PARENT, TEXTUALNAME, MEMBEHAVIOR, RELEASINGBEHAVIOR)       \
   void visit##CLASS(CLASS *I);
 #include "swift/SIL/SILNodes.def"
 
@@ -473,22 +473,16 @@ template<typename ImplClass>
 void
 SILCloner<ImplClass>::visitAllocRefInst(AllocRefInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
-  SILInstruction *NewInst = nullptr;
-  if (Inst->isObjC()) {
-    NewInst = getBuilder().createAllocRef(getOpLocation(Inst->getLoc()),
-                                          getOpType(Inst->getType()),
-                                          true, Inst->canAllocOnStack());
-  } else {
-    auto CountArgs = getOpValueArray<8>(OperandValueArrayRef(Inst->getTailAllocatedCounts()));
-    SmallVector<SILType, 4> ElemTypes;
-    for (SILType OrigElemType : Inst->getTailAllocatedTypes()) {
-      ElemTypes.push_back(getOpType(OrigElemType));
-    }
-    NewInst = getBuilder().createAllocRef(getOpLocation(Inst->getLoc()),
-                                          getOpType(Inst->getType()),
-                                          Inst->canAllocOnStack(),
-                                          ElemTypes, CountArgs);
+  auto CountArgs = getOpValueArray<8>(OperandValueArrayRef(Inst->
+                                                    getTailAllocatedCounts()));
+  SmallVector<SILType, 4> ElemTypes;
+  for (SILType OrigElemType : Inst->getTailAllocatedTypes()) {
+    ElemTypes.push_back(getOpType(OrigElemType));
   }
+  auto *NewInst = getBuilder().createAllocRef(getOpLocation(Inst->getLoc()),
+                                      getOpType(Inst->getType()),
+                                      Inst->isObjC(), Inst->canAllocOnStack(),
+                                      ElemTypes, CountArgs);
   doPostProcess(Inst, NewInst);
 }
 
@@ -496,11 +490,19 @@ template<typename ImplClass>
 void
 SILCloner<ImplClass>::visitAllocRefDynamicInst(AllocRefDynamicInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
-  doPostProcess(Inst,
-    getBuilder().createAllocRefDynamic(getOpLocation(Inst->getLoc()),
-                                       getOpValue(Inst->getOperand()),
-                                       getOpType(Inst->getType()),
-                                       Inst->isObjC()));
+  auto CountArgs = getOpValueArray<8>(OperandValueArrayRef(Inst->
+                                                  getTailAllocatedCounts()));
+  SmallVector<SILType, 4> ElemTypes;
+  for (SILType OrigElemType : Inst->getTailAllocatedTypes()) {
+    ElemTypes.push_back(getOpType(OrigElemType));
+  }
+  auto *NewInst = getBuilder().createAllocRefDynamic(
+                                      getOpLocation(Inst->getLoc()),
+                                      getOpValue(Inst->getMetatypeOperand()),
+                                      getOpType(Inst->getType()),
+                                      Inst->isObjC(),
+                                      ElemTypes, CountArgs);
+  doPostProcess(Inst, NewInst);
 }
 
 template<typename ImplClass>
@@ -658,24 +660,39 @@ template<typename ImplClass>
 void
 SILCloner<ImplClass>::visitLoadInst(LoadInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
-  doPostProcess(Inst,
-    getBuilder().createLoad(getOpLocation(Inst->getLoc()),
-                            getOpValue(Inst->getOperand())));
+  doPostProcess(Inst, getBuilder().createLoad(getOpLocation(Inst->getLoc()),
+                                              getOpValue(Inst->getOperand()),
+                                              Inst->getOwnershipQualifier()));
 }
 
-template<typename ImplClass>
-void
-SILCloner<ImplClass>::visitStoreInst(StoreInst *Inst) {
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitLoadBorrowInst(LoadBorrowInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
-    getBuilder().createStore(getOpLocation(Inst->getLoc()),
-                             getOpValue(Inst->getSrc()),
-                             getOpValue(Inst->getDest())));
+                getBuilder().createLoadBorrow(getOpLocation(Inst->getLoc()),
+                                              getOpValue(Inst->getOperand())));
 }
 
-template<typename ImplClass>
-void
-SILCloner<ImplClass>::visitAssignInst(AssignInst *Inst) {
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitStoreInst(StoreInst *Inst) {
+  getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
+  doPostProcess(Inst, getBuilder().createStore(getOpLocation(Inst->getLoc()),
+                                               getOpValue(Inst->getSrc()),
+                                               getOpValue(Inst->getDest()),
+                                               Inst->getOwnershipQualifier()));
+}
+
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitEndBorrowInst(EndBorrowInst *Inst) {
+  getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
+  doPostProcess(Inst,
+                getBuilder().createEndBorrow(getOpLocation(Inst->getLoc()),
+                                             getOpValue(Inst->getSrc()),
+                                             getOpValue(Inst->getDest())));
+}
+
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitAssignInst(AssignInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
     getBuilder().createAssign(getOpLocation(Inst->getLoc()),
@@ -1114,9 +1131,16 @@ SILCloner<ImplClass>::visitRetainValueInst(RetainValueInst *Inst) {
                                    Inst->getAtomicity()));
 }
 
-template<typename ImplClass>
-void
-SILCloner<ImplClass>::visitReleaseValueInst(ReleaseValueInst *Inst) {
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitCopyValueInst(CopyValueInst *Inst) {
+  getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
+  doPostProcess(Inst,
+                getBuilder().createCopyValue(getOpLocation(Inst->getLoc()),
+                                             getOpValue(Inst->getOperand())));
+}
+
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitReleaseValueInst(ReleaseValueInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
     getBuilder().createReleaseValue(getOpLocation(Inst->getLoc()),
@@ -1124,9 +1148,17 @@ SILCloner<ImplClass>::visitReleaseValueInst(ReleaseValueInst *Inst) {
                                     Inst->getAtomicity()));
 }
 
-template<typename ImplClass>
-void
-SILCloner<ImplClass>::visitAutoreleaseValueInst(AutoreleaseValueInst *Inst) {
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitDestroyValueInst(DestroyValueInst *Inst) {
+  getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
+  doPostProcess(
+      Inst, getBuilder().createDestroyValue(getOpLocation(Inst->getLoc()),
+                                            getOpValue(Inst->getOperand())));
+}
+
+template <typename ImplClass>
+void SILCloner<ImplClass>::visitAutoreleaseValueInst(
+    AutoreleaseValueInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
     getBuilder().createAutoreleaseValue(getOpLocation(Inst->getLoc()),
@@ -1707,8 +1739,8 @@ void SILCloner<ImplClass>::visitProjectBoxInst(ProjectBoxInst *Inst) {
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
     getBuilder().createProjectBox(getOpLocation(Inst->getLoc()),
-                                  getOpType(Inst->getValueType()),
-                                  getOpValue(Inst->getOperand())));
+                                  getOpValue(Inst->getOperand()),
+                                  Inst->getFieldIndex()));
 }
 
 template<typename ImplClass>
@@ -1717,7 +1749,7 @@ void SILCloner<ImplClass>::visitProjectExistentialBoxInst(
   getBuilder().setCurrentDebugScope(getOpScope(Inst->getDebugScope()));
   doPostProcess(Inst,
       getBuilder().createProjectExistentialBox(getOpLocation(Inst->getLoc()),
-                                               getOpType(Inst->getValueType()),
+                                               getOpType(Inst->getType()),
                                                getOpValue(Inst->getOperand())));
 }
 

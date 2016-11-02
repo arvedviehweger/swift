@@ -102,7 +102,7 @@ func testD(_ m: MetaHolder, dd: D.Type, d: D) {
   // CHECK: [[RESULT:%.*]] = project_box [[D2]]
   // CHECK: [[FN:%[0-9]+]] = function_ref @_TFE19protocol_extensionsPS_2P111returnsSelf{{.*}}
   // CHECK: [[DCOPY:%[0-9]+]] = alloc_stack $D
-  // CHECK: store [[D]] to [[DCOPY]] : $*D
+  // CHECK: store [[D]] to [init] [[DCOPY]] : $*D
   // CHECK: apply [[FN]]<D>([[RESULT]], [[DCOPY]]) : $@convention(method) <τ_0_0 where τ_0_0 : P1> (@in_guaranteed τ_0_0) -> @out τ_0_0
   var d2: D = d.returnsSelf()
 
@@ -650,21 +650,21 @@ func test_open_existential_semantics_class(_ guaranteed: CP1,
   // CHECK: [[IMMEDIATE_BOX:%.*]] = alloc_box $CP1
   // CHECK: [[PB:%.*]] = project_box [[IMMEDIATE_BOX]]
 
-  // CHECK-NOT: strong_retain %0
+  // CHECK-NOT: copy_value %0
   // CHECK: [[VALUE:%.*]] = open_existential_ref %0
   // CHECK: [[METHOD:%.*]] = function_ref
   // CHECK: apply [[METHOD]]<{{.*}}>([[VALUE]])
-  // CHECK-NOT: strong_release [[VALUE]]
-  // CHECK-NOT: strong_release %0
+  // CHECK-NOT: destroy_value [[VALUE]]
+  // CHECK-NOT: destroy_value %0
   guaranteed.f1()
 
   // CHECK: [[IMMEDIATE:%.*]] = load [[PB]]
-  // CHECK: strong_retain [[IMMEDIATE]]
+  // CHECK: copy_value [[IMMEDIATE]]
   // CHECK: [[VALUE:%.*]] = open_existential_ref [[IMMEDIATE]]
   // CHECK: [[METHOD:%.*]] = function_ref
   // CHECK: apply [[METHOD]]<{{.*}}>([[VALUE]])
-  // CHECK: strong_release [[VALUE]]
-  // CHECK-NOT: strong_release [[IMMEDIATE]]
+  // CHECK: destroy_value [[VALUE]]
+  // CHECK-NOT: destroy_value [[IMMEDIATE]]
   immediate.f1()
 
   // CHECK: [[F:%.*]] = function_ref {{.*}}plusOneCP1
@@ -672,8 +672,8 @@ func test_open_existential_semantics_class(_ guaranteed: CP1,
   // CHECK: [[VALUE:%.*]] = open_existential_ref [[PLUS_ONE]]
   // CHECK: [[METHOD:%.*]] = function_ref
   // CHECK: apply [[METHOD]]<{{.*}}>([[VALUE]])
-  // CHECK: strong_release [[VALUE]]
-  // CHECK-NOT: strong_release [[PLUS_ONE]]
+  // CHECK: destroy_value [[VALUE]]
+  // CHECK-NOT: destroy_value [[PLUS_ONE]]
   plusOneCP1().f1()
 }
 

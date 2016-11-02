@@ -820,7 +820,10 @@ void TypeChecker::synthesizeAccessorsForStorage(AbstractStorageDecl *storage,
   // If the decl is stored, convert it to StoredWithTrivialAccessors
   // by synthesizing the full set of accessors.
   if (!storage->hasAccessorFunctions()) {
-    addTrivialAccessorsToStorage(storage, *this);
+    if (storage->getAttrs().hasAttribute<NSManagedAttr>())
+      maybeAddAccessorsToVariable(cast<VarDecl>(storage), *this);
+    else
+      addTrivialAccessorsToStorage(storage, *this);
     return;
   }
 
@@ -1135,17 +1138,6 @@ static FuncDecl *completeLazyPropertyGetter(VarDecl *VD, VarDecl *Storage,
   return Get;
 }
 
-static ArrayRef<Substitution>
-getForwardingSubstitutions(DeclContext *DC) {
-  if (auto *env = DC->getGenericEnvironmentOfContext()) {
-    auto *sig = DC->getGenericSignatureOfContext();
-    return env->getForwardingSubstitutions(
-        DC->getParentModule(), sig);
-  }
-
-  return { };
-}
-
 void TypeChecker::completePropertyBehaviorStorage(VarDecl *VD,
                                VarDecl *BehaviorStorage,
                                FuncDecl *DefaultInitStorage,
@@ -1278,16 +1270,17 @@ void TypeChecker::completePropertyBehaviorStorage(VarDecl *VD,
   // Add accessors to the storage, since we'll need them to satisfy the
   // conformance requirements.
   addTrivialAccessorsToStorage(Storage, *this);
-  
+
+  // FIXME: Hack to eliminate spurious diagnostics.
+  if (BehaviorStorage->isStatic() != Storage->isStatic()) return;
+
   // Add the witnesses to the conformance.
-  auto MemberSubs = getForwardingSubstitutions(DC);
-  BehaviorConformance->setWitness(BehaviorStorage,
-                                 ConcreteDeclRef(Context, Storage, MemberSubs));
-  BehaviorConformance->setWitness(BehaviorStorage->getGetter(),
-                    ConcreteDeclRef(Context, Storage->getGetter(), MemberSubs));
+  recordKnownWitness(BehaviorConformance, BehaviorStorage, Storage);
+  recordKnownWitness(BehaviorConformance, BehaviorStorage->getGetter(),
+                     Storage->getGetter());
   if (BehaviorStorage->isSettable(DC))
-    BehaviorConformance->setWitness(BehaviorStorage->getSetter(),
-                    ConcreteDeclRef(Context, Storage->getSetter(), MemberSubs));
+    recordKnownWitness(BehaviorConformance, BehaviorStorage->getSetter(),
+                       Storage->getSetter());
 }
 
 void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
@@ -1442,9 +1435,7 @@ void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
   addMemberToContextIfNeeded(Parameter, DC);
 
   // Add the witnesses to the conformance.
-  auto MemberSubs = getForwardingSubstitutions(DC);
-  BehaviorConformance->setWitness(BehaviorParameter,
-                               ConcreteDeclRef(Context, Parameter, MemberSubs));
+  recordKnownWitness(BehaviorConformance, BehaviorParameter, Parameter);
 }
 
 void TypeChecker::completePropertyBehaviorAccessors(VarDecl *VD,

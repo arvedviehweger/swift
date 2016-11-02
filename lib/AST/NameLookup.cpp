@@ -163,7 +163,7 @@ bool swift::removeShadowedDecls(SmallVectorImpl<ValueDecl*> &decls,
       if (!decl->hasType())
         continue;
       if (auto assocType = dyn_cast<AssociatedTypeDecl>(decl))
-        if (!assocType->getArchetype())
+        if (!assocType->getProtocol()->isValidGenericContext())
           continue;
     }
     
@@ -443,7 +443,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
                                      LazyResolver *TypeResolver,
                                      bool IsKnownNonCascading,
                                      SourceLoc Loc, bool IsTypeLookup,
-                                     bool AllowProtocolMembers) {
+                                     bool AllowProtocolMembers,
+                                     bool IgnoreAccessControl) {
   Module &M = *DC->getParentModule();
   ASTContext &Ctx = M.getASTContext();
   const SourceManager &SM = Ctx.SourceMgr;
@@ -608,7 +609,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             lookupType = proto->getDeclaredType();
         }
 
-        if (!lookupType || lookupType->is<ErrorType>()) continue;
+        if (!lookupType || lookupType->hasError()) continue;
 
         // If we're performing a static lookup, use the metatype.
         // FIXME: This is awful. The client should filter, not us.
@@ -630,6 +631,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           options |= NL_ProtocolMembers;
         if (IsTypeLookup)
           options |= NL_OnlyTypes;
+        if (IgnoreAccessControl)
+          options |= NL_IgnoreAccessibility;
 
         SmallVector<ValueDecl *, 4> lookup;
         dc->lookupQualified(lookupType, Name, options, TypeResolver, lookup);
@@ -645,7 +648,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           auto unavailableLookupResult =
             [&](const UnqualifiedLookupResult &result) {
             return result.getValueDecl()->getAttrs()
-                     .isUnavailableInCurrentSwift();
+                     .isUnavailableInSwiftVersion();
           };
 
           // If all of the results we found are unavailable, keep looking.
@@ -815,6 +818,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             options |= NL_ProtocolMembers;
           if (IsTypeLookup)
             options |= NL_OnlyTypes;
+          if (IgnoreAccessControl)
+            options |= NL_IgnoreAccessibility;
 
           if (!ExtendedType)
             ExtendedType = ErrorType::get(Ctx);
@@ -844,7 +849,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             auto unavailableLookupResult =
               [&](const UnqualifiedLookupResult &result) {
               return result.getValueDecl()->getAttrs()
-                       .isUnavailableInCurrentSwift();
+                       .isUnavailableInSwiftVersion();
             };
 
             // If all of the results we found are unavailable, keep looking.
@@ -1151,7 +1156,7 @@ void NominalTypeDecl::addedMember(Decl *member) {
 
 void ExtensionDecl::addedMember(Decl *member) {
   if (NextExtension.getInt()) {
-    if (getExtendedType()->is<ErrorType>())
+    if (getExtendedType()->hasError())
       return;
 
     auto nominal = getExtendedType()->getAnyNominal();
@@ -1336,7 +1341,7 @@ bool DeclContext::lookupQualified(Type type,
   using namespace namelookup;
   assert(decls.empty() && "additive lookup not supported");
 
-  if (type->is<ErrorType>())
+  if (type->hasError())
     return false;
 
   auto checkLookupCascading = [this, options]() -> Optional<bool> {

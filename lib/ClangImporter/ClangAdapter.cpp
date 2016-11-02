@@ -337,6 +337,7 @@ OmissionTypeName importer::getClangTypeNameForOmission(clang::ASTContext &ctx,
     // FIXME: Types that can be mapped, but aren't yet.
     case clang::BuiltinType::Half:
     case clang::BuiltinType::LongDouble:
+    case clang::BuiltinType::Float128:
     case clang::BuiltinType::NullPtr:
       return OmissionTypeName();
 
@@ -665,9 +666,9 @@ bool importer::isObjCId(const clang::Decl *decl) {
   return typedefDecl->getName() == "id";
 }
 
-bool importer::isUnavailableInSwift(const clang::Decl *decl,
-                                    PlatformAvailability &platformAvailability,
-                                    bool enableObjCInterop) {
+bool importer::isUnavailableInSwift(
+    const clang::Decl *decl, const PlatformAvailability &platformAvailability,
+    bool enableObjCInterop) {
   // 'id' is always unavailable in Swift.
   if (enableObjCInterop && isObjCId(decl))
     return true;

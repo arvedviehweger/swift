@@ -205,7 +205,8 @@ getBuiltinGenericFunction(Identifier Id,
   GenericSignature *Sig =
       GenericSignature::get(GenericParamTypes, requirements);
   GenericEnvironment *Env =
-      GenericEnvironment::get(Context, InterfaceToArchetypeMap);
+      GenericEnvironment::get(Context, GenericParamTypes,
+                              InterfaceToArchetypeMap);
 
   Type InterfaceType = GenericFunctionType::get(Sig, ArgParamType, ResType,
                                                 AnyFunctionType::ExtInfo());
@@ -445,7 +446,6 @@ createGenericParam(ASTContext &ctx, const char *name, unsigned index) {
   auto genericParam =
     new (ctx) GenericTypeParamDecl(&M->getMainFile(FileUnitKind::Builtin),
                                    ident, SourceLoc(), 0, index);
-  genericParam->setArchetype(archetype);
   return std::make_pair(archetype, genericParam);
 }
 

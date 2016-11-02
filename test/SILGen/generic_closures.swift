@@ -10,7 +10,7 @@ func generic_nondependent_context<T>(_ x: T, y: Int) -> Int {
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures28generic_nondependent_context{{.*}} : $@convention(thin) (Int) -> Int
   // CHECK: [[FOO_CLOSURE:%.*]] = partial_apply [[FOO]](%1)
-  // CHECK: strong_release [[FOO_CLOSURE]]
+  // CHECK: destroy_value [[FOO_CLOSURE]]
   let _ = foo
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures28generic_nondependent_context{{.*}} : $@convention(thin) (Int) -> Int
@@ -24,7 +24,7 @@ func generic_capture<T>(_ x: T) -> Any.Type {
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures15generic_capture{{.*}} : $@convention(thin) <τ_0_0> () -> @thick Any.Type
   // CHECK: [[FOO_CLOSURE:%.*]] = partial_apply [[FOO]]<T>()
-  // CHECK: strong_release [[FOO_CLOSURE]]
+  // CHECK: destroy_value [[FOO_CLOSURE]]
   let _ = foo
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures15generic_capture{{.*}} : $@convention(thin) <τ_0_0> () -> @thick Any.Type
@@ -38,7 +38,7 @@ func generic_capture_cast<T>(_ x: T, y: Any) -> Bool {
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures20generic_capture_cast{{.*}} : $@convention(thin) <τ_0_0> (@in Any) -> Bool
   // CHECK: [[FOO_CLOSURE:%.*]] = partial_apply [[FOO]]<T>()
-  // CHECK: strong_release [[FOO_CLOSURE]]
+  // CHECK: destroy_value [[FOO_CLOSURE]]
   let _ = foo
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures20generic_capture_cast{{.*}} : $@convention(thin) <τ_0_0> (@in Any) -> Bool
@@ -56,7 +56,7 @@ func generic_nocapture_existential<T>(_ x: T, y: Concept) -> Bool {
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures29generic_nocapture_existential{{.*}} : $@convention(thin) (@in Concept) -> Bool
   // CHECK: [[FOO_CLOSURE:%.*]] = thin_to_thick_function [[FOO]]
-  // CHECK: strong_release [[FOO_CLOSURE]]
+  // CHECK: destroy_value [[FOO_CLOSURE]]
   let _ = foo
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures29generic_nocapture_existential{{.*}} : $@convention(thin) (@in Concept) -> Bool
@@ -70,7 +70,7 @@ func generic_dependent_context<T>(_ x: T, y: Int) -> T {
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures25generic_dependent_context{{.*}} : $@convention(thin) <τ_0_0> (@owned @box τ_0_0) -> @out τ_0_0
   // CHECK: [[FOO_CLOSURE:%.*]] = partial_apply [[FOO]]<T>([[BOX:%.*]])
-  // CHECK: strong_release [[FOO_CLOSURE]]
+  // CHECK: destroy_value [[FOO_CLOSURE]]
   let _ = foo
 
   // CHECK: [[FOO:%.*]] = function_ref @_TFF16generic_closures25generic_dependent_context{{.*}} : $@convention(thin) <τ_0_0> (@owned @box τ_0_0) -> @out τ_0_0
@@ -131,7 +131,6 @@ func nested_closure_in_generic<T>(_ x:T) -> T {
 
 // CHECK-LABEL: sil hidden @_TF16generic_closures16local_properties
 func local_properties<T>(_ t: inout T) {
-  // CHECK: [[TBOX:%[0-9]+]] = alloc_box $T
   var prop: T {
     get {
       return t
@@ -141,11 +140,11 @@ func local_properties<T>(_ t: inout T) {
     }
   }
 
-  // CHECK: [[GETTER_REF:%[0-9]+]] = function_ref [[GETTER_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@owned @box τ_0_0) -> @out τ_0_0
+  // CHECK: [[GETTER_REF:%[0-9]+]] = function_ref [[GETTER_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@inout_aliasable τ_0_0) -> @out τ_0_0
   // CHECK: apply [[GETTER_REF]]
   t = prop
 
-  // CHECK: [[SETTER_REF:%[0-9]+]] = function_ref [[SETTER_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@in τ_0_0, @owned @box τ_0_0) -> ()
+  // CHECK: [[SETTER_REF:%[0-9]+]] = function_ref [[SETTER_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@in τ_0_0, @inout_aliasable τ_0_0) -> ()
   // CHECK: apply [[SETTER_REF]]
   prop = t
 
@@ -158,7 +157,7 @@ func local_properties<T>(_ t: inout T) {
     }
   }
 
-  // CHECK: [[GETTER2_REF:%[0-9]+]] = function_ref [[GETTER2_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@owned @box τ_0_0) -> @out τ_0_0
+  // CHECK: [[GETTER2_REF:%[0-9]+]] = function_ref [[GETTER2_CLOSURE:@_TFF16generic_closures16local_properties.*]] : $@convention(thin) <τ_0_0> (@inout_aliasable τ_0_0) -> @out τ_0_0
   // CHECK: apply [[GETTER2_REF]]
   t = prop2
 
@@ -215,7 +214,7 @@ func outer_generic<T>(t: T, i: Int) {
   // CHECK: [[CLOSURE:%.*]] = partial_apply [[FN]]<T, ()>() : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0) -> @out τ_1_0
   // CHECK: [[THUNK:%.*]] = function_ref @_TTRXFo_iT__iT__XFo___
   // CHECK: [[THUNK_CLOSURE:%.*]] = partial_apply [[THUNK]]([[CLOSURE]])
-  // CHECK: strong_release [[THUNK_CLOSURE]]
+  // CHECK: destroy_value [[THUNK_CLOSURE]]
 
   // CHECK: [[FN:%.*]] = function_ref @_TFF16generic_closures13outer_genericurFT1tx1iSi_T_L_23inner_generic_nocaptureu__rFT1uqd___qd__ : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0) -> @out τ_1_0
   // CHECK: [[RESULT:%.*]] = apply [[FN]]<T, T>({{.*}}) : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0) -> @out τ_1_0
@@ -225,7 +224,7 @@ func outer_generic<T>(t: T, i: Int) {
   // CHECK: [[CLOSURE:%.*]] = partial_apply [[FN]]<T, ()>(%1) : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0, Int) -> Int
   // CHECK: [[THUNK:%.*]] = function_ref @_TTRXFo_iT__dSi_XFo__dSi_
   // CHECK: [[THUNK_CLOSURE:%.*]] = partial_apply [[THUNK]]([[CLOSURE]])
-  // CHECK: strong_release [[THUNK_CLOSURE]]
+  // CHECK: destroy_value [[THUNK_CLOSURE]]
   let _: () -> Int = inner_generic1
 
   // CHECK: [[FN:%.*]] = function_ref @_TFF16generic_closures13outer_genericurFT1tx1iSi_T_L_14inner_generic1u__rfT1uqd___Si : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0, Int) -> Int
@@ -236,7 +235,7 @@ func outer_generic<T>(t: T, i: Int) {
   // CHECK: [[CLOSURE:%.*]] = partial_apply [[FN]]<T, ()>([[ARG:%.*]]) : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0, @owned @box τ_0_0) -> @out τ_0_0
   // CHECK: [[THUNK:%.*]] = function_ref @_TTRGrXFo_iT__ix_XFo__ix_
   // CHECK: [[THUNK_CLOSURE:%.*]] = partial_apply [[THUNK]]<T>([[CLOSURE]])
-  // CHECK: strong_release [[THUNK_CLOSURE]]
+  // CHECK: destroy_value [[THUNK_CLOSURE]]
   let _: () -> T = inner_generic2
 
   // CHECK: [[FN:%.*]] = function_ref @_TFF16generic_closures13outer_genericurFT1tx1iSi_T_L_14inner_generic2u__rfT1uqd___x : $@convention(thin) <τ_0_0><τ_1_0> (@in τ_1_0, @owned @box τ_0_0) -> @out τ_0_0
@@ -258,7 +257,7 @@ func outer_concrete(i: Int) {
   // CHECK: [[CLOSURE:%.*]] = partial_apply [[FN]]<()>() : $@convention(thin) <τ_0_0> (@in τ_0_0) -> @out τ_0_0
   // CHECK: [[THUNK:%.*]] = function_ref @_TTRXFo_iT__iT__XFo___
   // CHECK: [[THUNK_CLOSURE:%.*]] = partial_apply [[THUNK]]([[CLOSURE]])
-  // CHECK: strong_release [[THUNK_CLOSURE]]
+  // CHECK: destroy_value [[THUNK_CLOSURE]]
   let _: () -> () = inner_generic_nocapture
 
   // CHECK: [[FN:%.*]] = function_ref @_TFF16generic_closures14outer_concreteFT1iSi_T_L_23inner_generic_nocaptureurFT1ux_x : $@convention(thin) <τ_0_0> (@in τ_0_0) -> @out τ_0_0
@@ -269,7 +268,7 @@ func outer_concrete(i: Int) {
   // CHECK: [[CLOSURE:%.*]] = partial_apply [[FN]]<()>(%0) : $@convention(thin) <τ_0_0> (@in τ_0_0, Int) -> Int
   // CHECK: [[THUNK:%.*]] = function_ref @_TTRXFo_iT__dSi_XFo__dSi_
   // CHECK: [[THUNK_CLOSURE:%.*]] = partial_apply [[THUNK]]([[CLOSURE]])
-  // CHECK: strong_release [[THUNK_CLOSURE]]
+  // CHECK: destroy_value [[THUNK_CLOSURE]]
   let _: () -> Int = inner_generic
 
   // CHECK: [[FN:%.*]] = function_ref @_TFF16generic_closures14outer_concreteFT1iSi_T_L_13inner_genericurfT1ux_Si : $@convention(thin) <τ_0_0> (@in τ_0_0, Int) -> Int

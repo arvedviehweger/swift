@@ -70,6 +70,7 @@ class ModuleFile : public LazyMemberLoader {
 
   /// The name of the module.
   StringRef Name;
+  friend StringRef getNameOfModule(const ModuleFile *);
 
   /// The target the module was built for.
   StringRef TargetTriple;
@@ -78,7 +79,7 @@ class ModuleFile : public LazyMemberLoader {
   StringRef IdentifierData;
 
   /// A callback to be invoked every time a type was deserialized.
-  llvm::function_ref<void(Type)> DeserializedTypeCallback;
+  std::function<void(Type)> DeserializedTypeCallback;
 
 public:
   /// Represents another module that has been imported as a dependency.
@@ -363,8 +364,11 @@ public:
   /// as being malformed.
   Status error(Status issue = Status::Malformed) {
     assert(issue != Status::Valid);
-    assert((!FileContext || issue != Status::Malformed) &&
-           "error deserializing an individual record");
+    // This would normally be an assertion but it's more useful to print the
+    // PrettyStackTrace here even in no-asserts builds. Malformed modules are
+    // generally unrecoverable.
+    if (FileContext && issue == Status::Malformed)
+      abort();
     setStatus(issue);
     return getStatus();
   }
@@ -706,10 +710,14 @@ public:
   /// Reads a substitution record from \c DeclTypeCursor.
   ///
   /// If the record at the cursor is not a substitution, returns None.
-  Optional<Substitution> maybeReadSubstitution(llvm::BitstreamCursor &Cursor);
+  Optional<Substitution> maybeReadSubstitution(llvm::BitstreamCursor &Cursor,
+                                               GenericEnvironment *genericEnv =
+                                                nullptr);
 
   /// Recursively reads a protocol conformance from the given cursor.
-  ProtocolConformanceRef readConformance(llvm::BitstreamCursor &Cursor);
+  ProtocolConformanceRef readConformance(llvm::BitstreamCursor &Cursor,
+                                         GenericEnvironment *genericEnv =
+                                           nullptr);
 
   /// Read the given normal conformance from the current module file.
   NormalProtocolConformance *

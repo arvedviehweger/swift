@@ -22,6 +22,7 @@
 #include "swift/AST/Decl.h"
 #include "swift/AST/DiagnosticEngine.h"
 #include "swift/AST/DiagnosticsClangImporter.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/NameLookup.h"
 #include "swift/AST/ParameterList.h"
@@ -235,6 +236,7 @@ namespace {
       // FIXME: Types that can be mapped, but aren't yet.
       case clang::BuiltinType::Half:
       case clang::BuiltinType::LongDouble:
+      case clang::BuiltinType::Float128:
       case clang::BuiltinType::NullPtr:
         return Type();
 
@@ -557,34 +559,38 @@ namespace {
       if (auto *objcTypeParamDecl =
             dyn_cast<clang::ObjCTypeParamDecl>(type->getDecl())) {
         const auto *typeParamContext = objcTypeParamDecl->getDeclContext();
-        GenericParamList *genericParams = nullptr;
+        GenericSignature *genericSig = nullptr;
+        GenericEnvironment *genericEnv = nullptr;
         if (auto *category =
               dyn_cast<clang::ObjCCategoryDecl>(typeParamContext)) {
           auto ext = cast_or_null<ExtensionDecl>(Impl.importDecl(category,
                                                                  false));
           if (!ext)
             return Type();
-          genericParams = ext->getGenericParams();
+          genericSig = ext->getGenericSignature();
+          genericEnv = ext->getGenericEnvironment();
         } else if (auto *interface =
             dyn_cast<clang::ObjCInterfaceDecl>(typeParamContext)) {
           auto cls = cast_or_null<ClassDecl>(Impl.importDecl(interface,
                                                              false));
           if (!cls)
             return Type();
-          genericParams = cls->getGenericParams();
+          genericSig = cls->getGenericSignature();
+          genericEnv = cls->getGenericEnvironment();
         }
         unsigned index = objcTypeParamDecl->getIndex();
         // Pull the generic param decl out of the imported class.
-        if (!genericParams) {
+        if (!genericSig) {
           // The ObjC type param didn't get imported, possibly because it was
           // suppressed. Treat it as a typedef.
           return Visit(objcTypeParamDecl->getUnderlyingType());
         }
-        if (index > genericParams->size()) {
+        if (index > genericSig->getGenericParams().size()) {
           return Type();
         }
-        GenericTypeParamDecl *paramDecl = genericParams->getParams()[index];
-        return { paramDecl->getArchetype(), ImportHint::ObjCPointer };
+        auto *paramDecl = genericSig->getGenericParams()[index];
+        return { genericEnv->mapTypeIntoContext(paramDecl),
+                 ImportHint::ObjCPointer };
       }
 
       // Import the underlying declaration.
@@ -841,8 +847,7 @@ namespace {
             } else if (typeParam->getSuperclass()) {
               importedTypeArg = typeParam->getSuperclass();
             } else {
-              auto protocols =
-                typeParam->getConformingProtocols(Impl.getTypeResolver());
+              auto protocols = typeParam->getConformingProtocols();
               assert(!protocols.empty() &&
                   "objc imported type param should have either superclass or "
                   "protocol requirement");
@@ -853,8 +858,6 @@ namespace {
               importedTypeArg = ProtocolCompositionType::get(
                   Impl.SwiftContext, protocolTypes);
             }
-            importedTypeArg = SubstitutedType::get(
-                typeParam->getArchetype(), importedTypeArg, Impl.SwiftContext);
             importedTypeArgs.push_back(importedTypeArg);
           }
           assert(importedTypeArgs.size() == typeParamCount);
@@ -1625,11 +1628,9 @@ static bool isObjCMethodResultAudited(const clang::Decl *decl) {
 }
 
 DefaultArgumentKind ClangImporter::Implementation::inferDefaultArgument(
-                      ASTContext &SwiftContext, EnumInfoCache &enumInfoCache,
-                      clang::Preprocessor &pp, clang::QualType type,
-                      OptionalTypeKind clangOptionality, Identifier baseName,
-                      unsigned numParams, StringRef argumentLabel,
-                      bool isFirstParameter, bool isLastParameter) {
+    clang::QualType type, OptionalTypeKind clangOptionality,
+    Identifier baseName, unsigned numParams, StringRef argumentLabel,
+    bool isFirstParameter, bool isLastParameter, NameImporter &nameImporter) {
   // Don't introduce a default argument for setters with only a single
   // parameter.
   if (numParams == 1 && camel_case::getFirstWord(baseName.str()) == "set")
@@ -1659,8 +1660,7 @@ DefaultArgumentKind ClangImporter::Implementation::inferDefaultArgument(
 
   // Option sets default to "[]" if they have "Options" in their name.
   if (const clang::EnumType *enumTy = type->getAs<clang::EnumType>())
-    if (enumInfoCache.getEnumKind(SwiftContext, enumTy->getDecl(), pp) ==
-        EnumKind::Options) {
+    if (nameImporter.getEnumKind(enumTy->getDecl()) == EnumKind::Options) {
       auto enumName = enumTy->getDecl()->getName();
       for (auto word : reversed(camel_case::getWords(enumName))) {
         if (camel_case::sameWordIgnoreFirstCase(word, "options"))
@@ -2032,10 +2032,9 @@ Type ClangImporter::Implementation::importMethodType(
          errorInfo && errorInfo->ParamIndex == params.size() - 1);
 
       auto defaultArg = inferDefaultArgument(
-          SwiftContext, enumInfoCache, getClangPreprocessor(), param->getType(),
-          optionalityOfParam, methodName.getBaseName(), numEffectiveParams,
-          name.empty() ? StringRef() : name.str(), paramIndex == 0,
-          isLastParameter);
+          param->getType(), optionalityOfParam, methodName.getBaseName(),
+          numEffectiveParams, name.empty() ? StringRef() : name.str(),
+          paramIndex == 0, isLastParameter, getNameImporter());
       if (defaultArg != DefaultArgumentKind::None)
         paramInfo->setDefaultArgumentKind(defaultArg);
     }

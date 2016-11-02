@@ -134,6 +134,7 @@ set(SWIFTLIB_ESSENTIAL
   Unmanaged.swift
   UnsafeBitMap.swift
   UnsafeBufferPointer.swift.gyb
+  UnsafeRawBufferPointer.swift.gyb
   UnsafePointer.swift.gyb
   UnsafeRawPointer.swift.gyb
   WriteBackMutableSlice.swift
@@ -178,7 +179,7 @@ else()
   #  -Wl,--whole-archive swiftRuntime -Wl,--no-whole-archive)
   find_package(ICU REQUIRED COMPONENTS uc i18n)
   list(APPEND swift_core_private_link_libraries
-      ${ICU_UC_LIBRARY} ${ICU_I18N_LIBRARY})
+       ICU_UC ICU_I18N)
 endif()
 
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")

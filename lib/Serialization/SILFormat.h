@@ -141,7 +141,6 @@ namespace sil_block {
     SIL_DEFAULT_WITNESS_TABLE,
     SIL_DEFAULT_WITNESS_TABLE_ENTRY,
     SIL_DEFAULT_WITNESS_TABLE_NO_ENTRY,
-    SIL_GENERIC_OUTER_PARAMS,
     SIL_INST_WITNESS_METHOD,
     SIL_SPECIALIZE_ATTR,
 
@@ -154,10 +153,8 @@ namespace sil_block {
       = decls_block::SPECIALIZED_PROTOCOL_CONFORMANCE,
     INHERITED_PROTOCOL_CONFORMANCE
       = decls_block::INHERITED_PROTOCOL_CONFORMANCE,
-    GENERIC_PARAM_LIST = decls_block::GENERIC_PARAM_LIST,
     GENERIC_PARAM = decls_block::GENERIC_PARAM,
     GENERIC_REQUIREMENT = decls_block::GENERIC_REQUIREMENT,
-    LAST_GENERIC_REQUIREMENT = decls_block::LAST_GENERIC_REQUIREMENT,
   };
 
   using SILInstNoOperandLayout = BCRecordLayout<
@@ -241,15 +238,16 @@ namespace sil_block {
 
   using SILFunctionLayout =
       BCRecordLayout<SIL_FUNCTION, SILLinkageField,
-                     BCFixed<1>, // transparent
-                     BCFixed<1>, // fragile
-                     BCFixed<2>, // thunk/reabstraction_thunk
-                     BCFixed<1>, // global_init
-                     BCFixed<2>, // inlineStrategy
-                     BCFixed<2>, // side effect info.
-                     BCFixed<2>, // number of specialize attributes
-                     TypeIDField,// SILFunctionType
-                     DeclIDField,// ClangNode owner
+                     BCFixed<1>,  // transparent
+                     BCFixed<1>,  // fragile
+                     BCFixed<2>,  // thunk/reabstraction_thunk
+                     BCFixed<1>,  // global_init
+                     BCFixed<2>,  // inlineStrategy
+                     BCFixed<2>,  // side effect info.
+                     BCFixed<2>,  // number of specialize attributes
+                     BCFixed<1>,  // has qualified ownership
+                     TypeIDField, // SILFunctionType
+                     DeclIDField, // ClangNode owner
                      BCArray<IdentifierIDField> // Semantics Attribute
                      // followed by specialize attributes
                      // followed by generic param list, if any
@@ -384,11 +382,6 @@ namespace sil_block {
     TypeIDField,          // Count operand
     ValueIDField,
     TypeIDField           // Result type
-  >;
-
-  using SILGenericOuterParamsLayout = BCRecordLayout<
-    SIL_GENERIC_OUTER_PARAMS,
-    DeclIDField // The decl id of the outer param if any.
   >;
 
   using SILInstWitnessMethodLayout = BCRecordLayout<

@@ -32,15 +32,11 @@ internal final class _EmptyArrayStorage
     return try body(UnsafeBufferPointer(start: nil, count: 0))
   }
 
-  // FIXME(ABI)#26 (Type Checker): remove 'Void' arguments here and elsewhere in this file, they
-  // are a workaround for an old compiler limitation.
-  override func _getNonVerbatimBridgedCount(_ dummy: Void) -> Int {
+  override func _getNonVerbatimBridgedCount() -> Int {
     return 0
   }
 
-  override func _getNonVerbatimBridgedHeapBuffer(
-    _ dummy: Void
-  ) -> _HeapBuffer<Int, AnyObject> {
+  override func _getNonVerbatimBridgedHeapBuffer() -> _HeapBuffer<Int, AnyObject> {
     return _HeapBuffer<Int, AnyObject>(
       _HeapBufferStorage<Int, AnyObject>.self, 0, 0)
   }
@@ -63,13 +59,15 @@ internal var _emptyArrayStorage : _EmptyArrayStorage {
     Builtin.addressof(&_swiftEmptyArrayStorage))
 }
 
-// FIXME(ABI)#141 : This whole class is a workaround for
-// <rdar://problem/18560464> Can't override generic method in generic
-// subclass.  If it weren't for that bug, we'd override
-// _withVerbatimBridgedUnsafeBuffer directly in
-// _ContiguousArrayStorage<Element>.
-// rdar://problem/19341002
-class _ContiguousArrayStorage1 : _ContiguousArrayStorageBase {
+// The class that implements the storage for a ContiguousArray<Element>
+@_versioned
+final class _ContiguousArrayStorage<Element> : _ContiguousArrayStorageBase {
+
+  deinit {
+    _elementPointer.deinitialize(count: countAndCapacity.count)
+    _fixLifetime(self)
+  }
+
 #if _runtime(_ObjC)
   /// If the `Element` is bridged verbatim, invoke `body` on an
   /// `UnsafeBufferPointer` to the elements and return the result.
@@ -86,28 +84,7 @@ class _ContiguousArrayStorage1 : _ContiguousArrayStorageBase {
 
   /// If `Element` is bridged verbatim, invoke `body` on an
   /// `UnsafeBufferPointer` to the elements.
-  internal func _withVerbatimBridgedUnsafeBufferImpl(
-    _ body: (UnsafeBufferPointer<AnyObject>) throws -> Void
-  ) rethrows {
-    _sanityCheckFailure(
-      "Must override _withVerbatimBridgedUnsafeBufferImpl in derived classes")
-  }
-#endif
-}
-
-// The class that implements the storage for a ContiguousArray<Element>
-@_versioned
-final class _ContiguousArrayStorage<Element> : _ContiguousArrayStorage1 {
-
-  deinit {
-    _elementPointer.deinitialize(count: countAndCapacity.count)
-    _fixLifetime(self)
-  }
-
-#if _runtime(_ObjC)
-  /// If `Element` is bridged verbatim, invoke `body` on an
-  /// `UnsafeBufferPointer` to the elements.
-  internal final override func _withVerbatimBridgedUnsafeBufferImpl(
+  internal final func _withVerbatimBridgedUnsafeBufferImpl(
     _ body: (UnsafeBufferPointer<AnyObject>) throws -> Void
   ) rethrows {
     if _isBridgedVerbatimToObjectiveC(Element.self) {
@@ -122,7 +99,7 @@ final class _ContiguousArrayStorage<Element> : _ContiguousArrayStorage1 {
   /// Returns the number of elements in the array.
   ///
   /// - Precondition: `Element` is bridged non-verbatim.
-  override internal func _getNonVerbatimBridgedCount(_ dummy: Void) -> Int {
+  override internal func _getNonVerbatimBridgedCount() -> Int {
     _sanityCheck(
       !_isBridgedVerbatimToObjectiveC(Element.self),
       "Verbatim bridging should be handled separately")
@@ -132,7 +109,7 @@ final class _ContiguousArrayStorage<Element> : _ContiguousArrayStorage1 {
   /// Bridge array elements and return a new buffer that owns them.
   ///
   /// - Precondition: `Element` is bridged non-verbatim.
-  override internal func _getNonVerbatimBridgedHeapBuffer(_ dummy: Void) ->
+  override internal func _getNonVerbatimBridgedHeapBuffer() ->
     _HeapBuffer<Int, AnyObject> {
     _sanityCheck(
       !_isBridgedVerbatimToObjectiveC(Element.self),
@@ -176,6 +153,7 @@ final class _ContiguousArrayStorage<Element> : _ContiguousArrayStorage1 {
   }
 }
 
+@_versioned
 @_fixed_layout
 internal struct _ContiguousArrayBuffer<Element> : _ArrayBufferProtocol {
 
@@ -247,6 +225,7 @@ internal struct _ContiguousArrayBuffer<Element> : _ArrayBufferProtocol {
   }
 
   /// A pointer to the first element.
+  @_versioned
   internal var firstElementAddress: UnsafeMutablePointer<Element> {
     return UnsafeMutablePointer(Builtin.projectTailElems(_storage,
                                                          Element.self))
@@ -312,16 +291,20 @@ internal struct _ContiguousArrayBuffer<Element> : _ArrayBufferProtocol {
   }
 
   @_versioned
+  @inline(__always)
   internal func getElement(_ i: Int) -> Element {
     _sanityCheck(i >= 0 && i < count, "Array index out of range")
     return firstElementAddress[i]
   }
 
   /// Get or set the value of the ith element.
+  @_versioned
   internal subscript(i: Int) -> Element {
+    @inline(__always)
     get {
       return getElement(i)
     }
+    @inline(__always)
     nonmutating set {
       _sanityCheck(i >= 0 && i < count, "Array index out of range")
 
@@ -336,6 +319,7 @@ internal struct _ContiguousArrayBuffer<Element> : _ArrayBufferProtocol {
   }
 
   /// The number of elements the buffer stores.
+  @_versioned
   internal var count: Int {
     get {
       return _storage.countAndCapacity.count
@@ -434,6 +418,7 @@ internal struct _ContiguousArrayBuffer<Element> : _ArrayBufferProtocol {
 #endif
 
   /// An object that keeps the elements stored in this buffer alive.
+  @_versioned
   internal var owner: AnyObject {
     return _storage
   }
@@ -600,7 +585,7 @@ internal func _copyCollectionToContiguousArray<
     source.formIndex(after: &i)
     p += 1
   }
-  _expectEnd(i, source)
+  _expectEnd(of: source, is: i)
   return ContiguousArray(_buffer: result)
 }
 

@@ -29,6 +29,7 @@
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILGlobalVariable.h"
 #include "swift/SIL/Notifications.h"
+#include "swift/SIL/SILLayout.h"
 #include "swift/SIL/SILType.h"
 #include "swift/SIL/SILVTable.h"
 #include "swift/SIL/SILWitnessTable.h"
@@ -91,6 +92,7 @@ private:
   friend class SILDefaultWitnessTable;
   friend class SILFunction;
   friend class SILGlobalVariable;
+  friend class SILLayout;
   friend class SILType;
   friend class SILVTable;
   friend class SILUndef;
@@ -131,6 +133,10 @@ private:
 
   /// The list of SILVTables in the module.
   VTableListType vtables;
+
+  /// This is a cache of vtable entries for quick look-up
+  llvm::DenseMap<std::pair<const SILVTable *, SILDeclRef>, SILFunction *>
+      VTableEntryCache;
 
   /// Lookup table for SIL witness tables from conformances.
   llvm::DenseMap<const NormalProtocolConformance *, SILWitnessTable *>

@@ -14,7 +14,7 @@ _ = A(x: C())
 // CHECK: bb0([[X:%.*]] : $C, %1 : $@thin A.Type):
 // CHECK:   [[X_UNOWNED:%.*]] = ref_to_unowned [[X]] : $C to $@sil_unowned C
 // CHECK:   unowned_retain [[X_UNOWNED]]
-// CHECK:   strong_release [[X]]
+// CHECK:   destroy_value [[X]]
 // CHECK:   [[A:%.*]] = struct $A ([[X_UNOWNED]] : $@sil_unowned C)
 // CHECK:   return [[A]]
 // CHECK: }
@@ -32,8 +32,8 @@ _ = AddressOnly(x: C(), p: X())
 // CHECK:   [[X_ADDR:%.*]] = struct_element_addr [[RET]] : $*AddressOnly, #AddressOnly.x
 // CHECK:   [[X_UNOWNED:%.*]] = ref_to_unowned [[X]] : $C to $@sil_unowned C
 // CHECK:   unowned_retain [[X_UNOWNED]] : $@sil_unowned C
-// CHECK:   store [[X_UNOWNED]] to [[X_ADDR]]
-// CHECK:   strong_release [[X]]
+// CHECK:   store [[X_UNOWNED]] to [init] [[X_ADDR]]
+// CHECK:   destroy_value [[X]]
 // CHECK: }
 
 // CHECK-LABEL:    sil hidden @_TF7unowned5test0FT1cCS_1C_T_ : $@convention(thin) (@owned C) -> () {
@@ -50,7 +50,7 @@ func test0(c c: C) {
 // CHECK-NEXT: [[PBX:%.*]] = project_box [[X]]
 // CHECK-NEXT: [[T2:%.*]] = ref_to_unowned %0 : $C  to $@sil_unowned C
 // CHECK-NEXT: unowned_retain [[T2]] : $@sil_unowned C
-// CHECK-NEXT: store [[T2]] to [[PBX]] : $*@sil_unowned C
+// CHECK-NEXT: store [[T2]] to [init] [[PBX]] : $*@sil_unowned C
 
   a.x = c
 // CHECK-NEXT: [[T1:%.*]] = struct_element_addr [[A]] : $*A, #A.x
@@ -66,7 +66,7 @@ func test0(c c: C) {
 // CHECK-NEXT:  [[T4:%.*]] = ref_to_unowned [[T3]] : $C to $@sil_unowned C
 // CHECK-NEXT:  unowned_retain [[T4]] : $@sil_unowned C  
 // CHECK-NEXT:  assign [[T4]] to [[XP]] : $*@sil_unowned C
-// CHECK-NEXT:  strong_release [[T3]] : $C
+// CHECK-NEXT:  destroy_value [[T3]] : $C
 }
 
 // CHECK-LABEL: sil hidden @{{.*}}unowned_local
@@ -78,7 +78,7 @@ func unowned_local() -> C {
   // CHECK-NEXT: [[PB:%.*]] = project_box [[uc]]
   // CHECK-NEXT: [[tmp1:%.*]] = ref_to_unowned [[c]] : $C to $@sil_unowned C
   // CHECK-NEXT: unowned_retain [[tmp1]]
-  // CHECK-NEXT: store [[tmp1]] to [[PB]]
+  // CHECK-NEXT: store [[tmp1]] to [init] [[PB]]
   unowned let uc = c
 
   // CHECK-NEXT: [[tmp2:%.*]] = load [[PB]]
@@ -86,8 +86,8 @@ func unowned_local() -> C {
   // CHECK-NEXT: [[tmp3:%.*]] = unowned_to_ref [[tmp2]]
   return uc
 
-  // CHECK-NEXT: strong_release [[uc]]
-  // CHECK-NEXT: strong_release [[c]]
+  // CHECK-NEXT: destroy_value [[uc]]
+  // CHECK-NEXT: destroy_value [[c]]
   // CHECK-NEXT: return [[tmp3]]
 }
 
@@ -104,8 +104,8 @@ func test_unowned_let_capture(_ aC : C) {
 // CHECK-NEXT:   [[UNOWNED_ARG:%.*]] = unowned_to_ref [[ARG]] : $@sil_unowned C to $C
 // CHECK-NEXT:   [[FUN:%.*]] = class_method [[UNOWNED_ARG]] : $C, #C.f!1 : (C) -> () -> Int , $@convention(method) (@guaranteed C) -> Int
 // CHECK-NEXT:   [[RESULT:%.*]] = apply [[FUN]]([[UNOWNED_ARG]]) : $@convention(method) (@guaranteed C) -> Int
-// CHECK-NEXT:   strong_release [[UNOWNED_ARG]]
-// CHECK-NEXT:   unowned_release [[ARG]] : $@sil_unowned C
+// CHECK-NEXT:   destroy_value [[UNOWNED_ARG]]
+// CHECK-NEXT:   destroy_value [[ARG]] : $@sil_unowned C
 // CHECK-NEXT:   return [[RESULT]] : $Int
 
 
@@ -125,7 +125,7 @@ class TestUnownedMember {
 // CHECK:  [[INVAL:%.*]] = ref_to_unowned %0 : $C to $@sil_unowned C
 // CHECK:  unowned_retain [[INVAL]] : $@sil_unowned C
 // CHECK:  assign [[INVAL]] to [[FIELDPTR]] : $*@sil_unowned C
-// CHECK:  strong_release %0 : $C
+// CHECK:  destroy_value %0 : $C
 // CHECK:  return [[SELF]] : $TestUnownedMember
 
 // Just verify that lowering an unowned reference to a type parameter

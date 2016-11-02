@@ -34,12 +34,9 @@ using namespace Lowering;
 //===----------------------------------------------------------------------===//
 
 SILGenFunction::SILGenFunction(SILGenModule &SGM, SILFunction &F)
-  : SGM(SGM), F(F),
-    B(*this, createBasicBlock()),
-    OpenedArchetypesTracker(F),
-    CurrentSILLoc(F.getLocation()),
-    Cleanups(*this)
-{
+    : SGM(SGM), F(F), StartOfPostmatter(F.end()), B(*this, createBasicBlock()),
+      OpenedArchetypesTracker(F), CurrentSILLoc(F.getLocation()),
+      Cleanups(*this) {
   B.setCurrentDebugScope(F.getDebugScope());
   B.setOpenedArchetypesTracker(&OpenedArchetypesTracker);
 }
@@ -282,7 +279,7 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         }
       
         // Just retain a by-val let.
-        B.emitRetainValueOperation(loc, Val);
+        B.emitCopyValueOperation(loc, Val);
       } else {
         // If we have a mutable binding for a 'let', such as 'self' in an
         // 'init' method, load it.
@@ -324,7 +321,7 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         if (canGuarantee) {
           capturedArgs.push_back(ManagedValue::forUnmanaged(vl.box));
         } else {
-          B.createStrongRetain(loc, vl.box, Atomicity::Atomic);
+          B.createCopyValue(loc, vl.box);
           capturedArgs.push_back(emitManagedRValueWithCleanup(vl.box));
         }
         escapesToMark.push_back(vl.value);
@@ -341,7 +338,7 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         // in-place.
         AllocBoxInst *allocBox =
           B.createAllocBox(loc, vl.value->getType().getObjectType());
-        ProjectBoxInst *boxAddress = B.createProjectBox(loc, allocBox);
+        ProjectBoxInst *boxAddress = B.createProjectBox(loc, allocBox, 0);
         B.createCopyAddr(loc, vl.value, boxAddress, IsNotTake,IsInitialization);
         capturedArgs.push_back(emitManagedRValueWithCleanup(allocBox));
       }
@@ -365,11 +362,9 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
   auto closure = *constant.getAnyFunctionRef();
   auto captureInfo = closure.getCaptureInfo();
   auto loweredCaptureInfo = SGM.Types.getLoweredLocalCaptures(closure);
-
-  assert(((constant.uncurryLevel == 1 &&
-           captureInfo.hasLocalCaptures()) ||
-          (constant.uncurryLevel == 0 &&
-           !captureInfo.hasLocalCaptures())) &&
+  auto hasCaptures = SGM.Types.hasLoweredLocalCaptures(closure);
+  assert(((constant.uncurryLevel == 1 && hasCaptures) ||
+          (constant.uncurryLevel == 0 && !hasCaptures)) &&
          "curried local functions not yet supported");
 
   auto constantInfo = getConstantInfo(constant);
@@ -409,7 +404,7 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
         loc, captureInfo);
   }
 
-  if (!captureInfo.hasLocalCaptures() && !wasSpecialized) {
+  if (!hasCaptures && !wasSpecialized) {
     auto result = ManagedValue::forUnmanaged(functionRef);
     return emitOrigToSubstValue(loc, result,
                                 AbstractionPattern(expectedType),
@@ -428,7 +423,8 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
   SILType closureTy =
     SILGenBuilder::getPartialApplyResultType(functionRef->getType(),
                                              capturedArgs.size(), SGM.M,
-                                             subs);
+                                             subs,
+                                             ParameterConvention::Direct_Owned);
   auto toClosure =
     B.createPartialApply(loc, functionRef, functionTy,
                          subs, forwardedArgs, closureTy);
@@ -438,7 +434,7 @@ SILGenFunction::emitClosureValue(SILLocation loc, SILDeclRef constant,
   //  - the original type
   auto origLoweredFormalType =
       AbstractionPattern(constantInfo.LoweredInterfaceType);
-  if (captureInfo.hasLocalCaptures()) {
+  if (hasCaptures) {
     // Get the unlowered formal type of the constant, stripping off
     // the first level of function application, which applies captures.
     origLoweredFormalType =
@@ -470,7 +466,7 @@ void SILGenFunction::emitFunction(FuncDecl *fd) {
   MagicFunctionName = SILGenModule::getMagicFunctionName(fd);
 
   Type resultTy = fd->getResultType();
-  emitProlog(fd, fd->getParameterLists(), resultTy);
+  emitProlog(fd, fd->getParameterLists(), resultTy, fd->hasThrows());
   prepareEpilog(resultTy, fd->hasThrows(), CleanupLocation(fd));
 
   emitProfilerIncrement(fd->getBody());
@@ -482,7 +478,8 @@ void SILGenFunction::emitFunction(FuncDecl *fd) {
 void SILGenFunction::emitClosure(AbstractClosureExpr *ace) {
   MagicFunctionName = SILGenModule::getMagicFunctionName(ace);
 
-  emitProlog(ace, ace->getParameters(), ace->getResultType());
+  emitProlog(ace, ace->getParameters(), ace->getResultType(),
+             ace->isBodyThrowing());
   prepareEpilog(ace->getResultType(), ace->isBodyThrowing(),
                 CleanupLocation(ace));
   if (auto *ce = dyn_cast<ClosureExpr>(ace)) {
@@ -795,7 +792,7 @@ void SILGenFunction::emitCurryThunk(ValueDecl *vd,
 
   } else if (auto fd = dyn_cast<AbstractFunctionDecl>(vd)) {
     // Forward implicit closure context arguments.
-    bool hasCaptures = fd->getCaptureInfo().hasLocalCaptures();
+    bool hasCaptures = SGM.M.Types.hasLoweredLocalCaptures(fd);
     if (hasCaptures)
       --paramCount;
 
@@ -840,7 +837,8 @@ void SILGenFunction::emitCurryThunk(ValueDecl *vd,
   // Partially apply the next uncurry level and return the result closure.
   auto closureTy =
     SILGenBuilder::getPartialApplyResultType(toFn->getType(), curriedArgs.size(),
-                                             SGM.M, subs);
+                                             SGM.M, subs,
+                                             ParameterConvention::Direct_Owned);
   SILInstruction *toClosure =
     B.createPartialApply(vd, toFn, toTy, subs, curriedArgs, closureTy);
   if (resultTy != closureTy)
@@ -859,7 +857,7 @@ void SILGenFunction::emitGeneratorFunction(SILDeclRef function, Expr *value) {
   // is not going to be ever used anyway.
   overrideLocationForMagicIdentifiers = SourceLoc();
 
-  emitProlog({ }, value->getType(), function.getDecl()->getDeclContext());
+  emitProlog({}, value->getType(), function.getDecl()->getDeclContext(), false);
   prepareEpilog(value->getType(), false, CleanupLocation::get(Loc));
   emitReturnExpr(Loc, value);
   emitEpilog(Loc);
@@ -873,8 +871,8 @@ SILGenBuilder::SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
                              SmallVectorImpl<SILInstruction *> *insertedInsts)
   : SILBuilder(insertBB, insertedInsts), SGM(gen.SGM) {}
 SILGenBuilder::SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
-                             SILInstruction *insertInst)
-    : SILBuilder(insertBB, insertInst->getIterator()), SGM(gen.SGM) {}
+                             SILBasicBlock::iterator insertInst)
+    : SILBuilder(insertBB, insertInst), SGM(gen.SGM) {}
 
 MetatypeInst *SILGenBuilder::createMetatype(SILLocation loc, SILType metatype) {
   auto theMetatype = metatype.castTo<MetatypeType>();

@@ -692,21 +692,22 @@ unsigned ConstraintGraph::computeConnectedComponents(
 /// edge in the graph.
 static bool shouldContractEdge(ConstraintKind kind) {
   switch (kind) {
-    case ConstraintKind::Bind:
-    case ConstraintKind::BindParam:
-    case ConstraintKind::Equal:
-    case ConstraintKind::BindOverload:
+  case ConstraintKind::Bind:
+  case ConstraintKind::BindParam:
+  case ConstraintKind::BindToPointerType:
+  case ConstraintKind::Equal:
+  case ConstraintKind::BindOverload:
 
-    // We currently only allow subtype contractions for the purpose of 
-    // parameter binding constraints.
-    // TODO: We do this because of how inout parameter bindings are handled
-    // for implicit closure parameters. We should consider adjusting our
-    // current approach to unlock more opportunities for subtype contractions.
-    case ConstraintKind::Subtype:
-      return true;
+  // We currently only allow subtype contractions for the purpose of 
+  // parameter binding constraints.
+  // TODO: We do this because of how inout parameter bindings are handled
+  // for implicit closure parameters. We should consider adjusting our
+  // current approach to unlock more opportunities for subtype contractions.
+  case ConstraintKind::Subtype:
+    return true;
 
-    default:
-      return false;
+  default:
+    return false;
   }
 }
 
@@ -731,7 +732,7 @@ static bool isStrictInoutSubtypeConstraint(Constraint *constraint) {
   if (!iot)
     return false;
 
-  return iot->getObjectType()->getAs<TypeVariableType>() == nullptr;
+  return !iot->getObjectType()->isTypeVariableOrMember();
 }
 
 bool ConstraintGraph::contractEdges() {
@@ -940,6 +941,8 @@ void ConstraintGraphNode::print(llvm::raw_ostream &out, unsigned indent) {
 }
 
 void ConstraintGraphNode::dump() {
+  llvm::SaveAndRestore<bool>
+    debug(TypeVar->getASTContext().LangOpts.DebugConstraintSolver, true);
   print(llvm::dbgs(), 0);
 }
 
@@ -951,6 +954,8 @@ void ConstraintGraph::print(llvm::raw_ostream &out) {
 }
 
 void ConstraintGraph::dump() {
+  llvm::SaveAndRestore<bool>
+    debug(CS.getASTContext().LangOpts.DebugConstraintSolver, true);
   print(llvm::dbgs());
 }
 

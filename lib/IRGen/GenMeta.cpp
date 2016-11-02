@@ -435,12 +435,7 @@ bool irgen::hasKnownSwiftMetadata(IRGenModule &IGM, ClassDecl *theClass) {
   // is enough to conclusively force us into a slower path.
   // Eventually we might have an attribute here or something based on
   // the deployment target.
-  return hasKnownSwiftImplementation(IGM, theClass);
-}
-
-/// Is the given class known to have an implementation in Swift?
-bool irgen::hasKnownSwiftImplementation(IRGenModule &IGM, ClassDecl *theClass) {
-  return !theClass->hasClangNode();
+  return theClass->hasKnownSwiftImplementation();
 }
 
 /// Is the given method known to be callable by vtable lookup?
@@ -451,7 +446,7 @@ bool irgen::hasKnownVTableEntry(IRGenModule &IGM,
   if (!theClass) {
     return false;
   }
-  return hasKnownSwiftImplementation(IGM, theClass);
+  return theClass->hasKnownSwiftImplementation();
 }
 
 /// Is it basically trivial to access the given metadata?  If so, we don't
@@ -1671,6 +1666,7 @@ namespace {
       case SILFunctionType::Representation::WitnessMethod:
       case SILFunctionType::Representation::ObjCMethod:
       case SILFunctionType::Representation::CFunctionPointer:
+      case SILFunctionType::Representation::Closure:
         // A thin function looks like a plain pointer.
         // FIXME: Except for extra inhabitants?
         return emitDirectMetadataRef(C.TheRawPointerType);
@@ -1850,6 +1846,7 @@ namespace {
       case SILFunctionType::Representation::WitnessMethod:
       case SILFunctionType::Representation::ObjCMethod:
       case SILFunctionType::Representation::CFunctionPointer:
+      case SILFunctionType::Representation::Closure:
         // A thin function looks like a plain pointer.
         // FIXME: Except for extra inhabitants?
         return emitFromValueWitnessTable(C.TheRawPointerType);

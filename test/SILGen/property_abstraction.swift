@@ -13,7 +13,7 @@ struct Foo<T, U> {
 // CHECK-LABEL: sil hidden @_TF20property_abstraction4getF
 // CHECK:         bb0([[X_ORIG:%.*]] : $Foo<Int, Int>):
 // CHECK:         [[F_ORIG:%.*]] = struct_extract [[X_ORIG]] : $Foo<Int, Int>, #Foo.f
-// CHECK:         strong_retain [[F_ORIG]]
+// CHECK:         copy_value [[F_ORIG]]
 // CHECK:         [[REABSTRACT_FN:%.*]] = function_ref @_TTR
 // CHECK:         [[F_SUBST:%.*]] = partial_apply [[REABSTRACT_FN]]([[F_ORIG]])
 // CHECK:         return [[F_SUBST]]
@@ -39,7 +39,7 @@ func inOutFunc(_ f: inout ((Int) -> Int)) { }
 // CHECK:         [[F_ORIG:%.*]] = load [[F_ADDR]]
 // CHECK:         [[REABSTRACT_FN:%.*]] = function_ref @_TTR
 // CHECK:         [[F_SUBST_IN:%.*]] = partial_apply [[REABSTRACT_FN]]([[F_ORIG]])
-// CHECK:         store [[F_SUBST_IN]] to [[F_SUBST_MAT]]
+// CHECK:         store [[F_SUBST_IN]] to [init] [[F_SUBST_MAT]]
 // CHECK:         apply [[INOUTFUNC]]([[F_SUBST_MAT]])
 // CHECK:         [[F_SUBST_OUT:%.*]] = load [[F_SUBST_MAT]]
 // CHECK:         [[REABSTRACT_FN:%.*]] = function_ref @_TTR
@@ -122,11 +122,9 @@ func setBuilder<F: Factory where F.Product == MyClass>(_ factory: inout F) {
 }
 // CHECK: sil hidden @_TF20property_abstraction10setBuilder{{.*}} : $@convention(thin) <F where F : Factory, F.Product == MyClass> (@inout F) -> ()
 // CHECK: bb0(%0 : $*F):
-// CHECK:   [[FACTORY:%.*]] = alloc_box $F
-// CHECK:   [[PB:%.*]] = project_box [[FACTORY]]
 // CHECK:   [[F0:%.*]] = function_ref @_TFF20property_abstraction10setBuilder{{.*}} : $@convention(thin) () -> @owned MyClass
 // CHECK:   [[F1:%.*]] = thin_to_thick_function [[F0]]
 // CHECK:   [[SETTER:%.*]] = witness_method $F, #Factory.builder!setter.1
 // CHECK:   [[REABSTRACTOR:%.*]] = function_ref @_TTR
 // CHECK:   [[F2:%.*]] = partial_apply [[REABSTRACTOR]]([[F1]])
-// CHECK:   apply [[SETTER]]<F, MyClass>([[F2]], [[PB]])
+// CHECK:   apply [[SETTER]]<F, MyClass>([[F2]], %0)

@@ -85,6 +85,7 @@ namespace swift {
   class Substitution;
   class TypeCheckerDebugConsumer;
   class DocComment;
+  class SILBoxType;
 
   enum class KnownProtocolKind : uint8_t;
 
@@ -155,6 +156,8 @@ public:
 
   ~ConstraintCheckerArenaRAII();
 };
+
+class SILLayout; // From SIL
 
 /// \brief Describes either a nominal type declaration or an extension
 /// declaration.
@@ -363,47 +366,13 @@ public:
   ProtocolDecl *getErrorDecl() const;
   CanType getExceptionType() const;
   
-  /// Retrieve the declaration of Swift.Bool.
-  NominalTypeDecl *getBoolDecl() const;
-  
-  /// Retrieve the declaration of Swift.Int.
-  NominalTypeDecl *getIntDecl() const;
-
-  /// Retrieve the declaration of Swift.UInt.
-  NominalTypeDecl *getUIntDecl() const;
-
-  /// Retrieve the declaration of Swift.Float.
-  NominalTypeDecl *getFloatDecl() const;
-
-  /// Retrieve the declaration of Swift.Double.
-  NominalTypeDecl *getDoubleDecl() const;
-
-  /// Retrieve the declaration of Swift.String.
-  NominalTypeDecl *getStringDecl() const;
-
-  /// Retrieve the declaration of Swift.Array<T>.
-  NominalTypeDecl *getArrayDecl() const;
-
-  /// Retrieve the declaration of Swift.Set<T>.
-  NominalTypeDecl *getSetDecl() const;
-
-  /// Retrieve the declaration of Swift.Sequence<T>.
-  NominalTypeDecl *getSequenceDecl() const;
-
-  /// Retrieve the declaration of Swift.Dictionary<K, V>.
-  NominalTypeDecl *getDictionaryDecl() const;
-
-  /// Retrieve the declaration of Swift.AnyHashable.
-  NominalTypeDecl *getAnyHashableDecl() const;
+#define KNOWN_STDLIB_TYPE_DECL(NAME, DECL_CLASS, NUM_GENERIC_PARAMS) \
+  /** Retrieve the declaration of Swift.NAME. */ \
+  DECL_CLASS *get##NAME##Decl() const;
+#include "swift/AST/KnownStdlibTypes.def"
 
   /// Retrieve the declaration of Swift.Optional or ImplicitlyUnwrappedOptional.
   EnumDecl *getOptionalDecl(OptionalTypeKind kind) const;
-
-  /// Retrieve the declaration of Swift.Optional<T>.
-  EnumDecl *getOptionalDecl() const;
-
-  /// Retrieve the declaration of Swift.ImplicitlyUnwrappedOptional<T>.
-  EnumDecl *getImplicitlyUnwrappedOptionalDecl() const;
 
   /// Retrieve the declaration of Swift.Optional<T>.Some.
   EnumElementDecl *getOptionalSomeDecl() const;
@@ -420,35 +389,10 @@ public:
   EnumElementDecl *getOptionalSomeDecl(OptionalTypeKind kind) const;
   EnumElementDecl *getOptionalNoneDecl(OptionalTypeKind kind) const;
 
-  /// Retrieve the declaration of Swift.OptionSet.
-  NominalTypeDecl *getOptionSetDecl() const;
-  
-  /// Retrieve the declaration of Swift.COpaquePointer.
-  NominalTypeDecl *getOpaquePointerDecl() const;
-
-  /// Retrieve the declaration of Swift.UnsafeMutableRawPointer.
-  NominalTypeDecl *getUnsafeMutableRawPointerDecl() const;
-
-  /// Retrieve the declaration of Swift.UnsafeRawPointer.
-  NominalTypeDecl *getUnsafeRawPointerDecl() const;
-
-  /// Retrieve the declaration of Swift.UnsafeMutablePointer<T>.
-  NominalTypeDecl *getUnsafeMutablePointerDecl() const;
-
-  /// Retrieve the declaration of Swift.UnsafePointer<T>.
-  NominalTypeDecl *getUnsafePointerDecl() const;
-
-  /// Retrieve the declaration of Swift.AutoreleasingUnsafeMutablePointer<T>.
-  NominalTypeDecl *getAutoreleasingUnsafeMutablePointerDecl() const;
-
-  /// Retrieve the declaration of Swift.Unmanaged<T>.
-  NominalTypeDecl *getUnmanagedDecl() const;
-
   /// Retrieve the declaration of the "pointee" property of a pointer type.
   VarDecl *getPointerPointeePropertyDecl(PointerTypeKind ptrKind) const;
 
-  /// Retrieve the declaration of Swift.Never.
-  NominalTypeDecl *getNeverDecl() const;
+  /// Retrieve the type Swift.Never.
   CanType getNeverType() const;
 
   /// Retrieve the declaration of Swift.Void.
@@ -490,7 +434,7 @@ public:
   FuncDecl *getGetBoolDecl(LazyResolver *resolver) const;
 
   /// Retrieve the declaration of Swift.==(Int, Int) -> Bool.
-  FuncDecl *getEqualIntDecl(LazyResolver *resolver) const;
+  FuncDecl *getEqualIntDecl() const;
   
   /// Retrieve the declaration of Swift._unimplementedInitializer.
   FuncDecl *getUnimplementedInitializerDecl(LazyResolver *resolver) const;
@@ -843,6 +787,13 @@ public:
                             clang::ObjCInterfaceDecl *classDecl,
                             bool forInstance);
 
+  /// Retrieve a generic signature with a single unconstrained type parameter,
+  /// like `<T>`.
+  CanGenericSignature getSingleGenericParameterSignature() const;
+  
+  /// Whether our effective Swift version is in the Swift 3 family
+  bool isSwiftVersion3() const { return LangOpts.isSwiftVersion3(); }
+
 private:
   friend class Decl;
   Optional<RawComment> getRawComment(const Decl *D);
@@ -877,6 +828,12 @@ private:
 
   friend class ArchetypeType;
   friend class ArchetypeBuilder::PotentialArchetype;
+
+  /// Provide context-level uniquing for SIL lowered type layouts.
+  friend SILLayout;
+  llvm::FoldingSet<SILLayout> *&getSILLayouts();
+  friend SILBoxType;
+  llvm::DenseMap<CanType, SILBoxType *> &getSILBoxTypes();
 };
 
 /// Retrieve information about the given Objective-C method for

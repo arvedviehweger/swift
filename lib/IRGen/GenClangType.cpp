@@ -77,8 +77,11 @@ getClangBuiltinTypeFromKind(const clang::ASTContext &context,
   case clang::BuiltinType::Id:                                                 \
     return context.SingletonId;
 #include "clang/AST/BuiltinTypes.def"
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix)                   \
+  case clang::BuiltinType::Id:                                                 \
+    return context.SingletonId;
+#include "clang/Basic/OpenCLImageTypes.def"
   }
-  llvm_unreachable("Unexpected builtin type!");
 }
 
 static clang::CanQualType getClangSelectorType(
@@ -572,6 +575,7 @@ clang::CanQualType GenClangType::visitSILFunctionType(CanSILFunctionType type) {
   case SILFunctionType::Representation::Method:
   case SILFunctionType::Representation::ObjCMethod:
   case SILFunctionType::Representation::WitnessMethod:
+  case SILFunctionType::Representation::Closure:
     llvm_unreachable("not an ObjC-compatible function");
   }
   

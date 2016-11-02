@@ -399,6 +399,9 @@ enum TypeResolutionFlags : unsigned {
 
   /// Whether we are in a type argument for an optional
   TR_ImmediateOptionalTypeArgument = 0x800000,
+
+  /// Whether we are checking the outermost type of a computed property setter's newValue
+  TR_ImmediateSetterNewValue = 0x1000000,
 };
 
 /// Option set describing how type resolution should work.
@@ -852,17 +855,14 @@ public:
                                     bool isGenericSignature,
                                     GenericTypeResolver *resolver);
 
-  /// \brief Substitute the given base type into the type of the given member,
-  /// producing the effective type that the member will have.
+  /// \brief Substitute the given base type into the type of the given nested type,
+  /// producing the effective type that the nested type will have.
   ///
   /// \param module The module in which the substitution will be performed.
   /// \param member The member whose type projection is being computed.
   /// \param baseTy The base type that will be substituted for the 'Self' of the
   /// member.
-  /// \param isTypeReference Whether this is a reference to a type declaration
-  /// within a type context.
-  Type substMemberTypeWithBase(Module *module, const ValueDecl *member,
-                               Type baseTy, bool isTypeReference);
+  Type substMemberTypeWithBase(Module *module, const TypeDecl *member, Type baseTy);
 
   /// \brief Retrieve the superclass type of the given type, or a null type if
   /// the type has no supertype.
@@ -1010,17 +1010,13 @@ public:
   bool isProtocolExtensionUsable(DeclContext *dc, Type type,
                                  ExtensionDecl *protocolExtension) override;
 
-  GenericEnvironment *markInvalidGenericSignature(DeclContext *dc);
-
   /// Configure the interface type of a function declaration.
   void configureInterfaceType(AbstractFunctionDecl *func);
 
   /// Validate the signature of a generic function.
   ///
   /// \param func The generic function.
-  ///
-  /// \returns true if an error occurred, or false otherwise.
-  bool validateGenericFuncSignature(AbstractFunctionDecl *func);
+  void validateGenericFuncSignature(AbstractFunctionDecl *func);
 
   /// Revert the signature of a generic function to its pre-type-checked state,
   /// so that it can be type checked again when we have resolved its generic
@@ -1043,9 +1039,7 @@ public:
   ///
   /// \param inferRequirements When non-empty, callback that will be invoked
   /// to perform any additional requirement inference that contributes to the
-  /// generic signature. Returns true if an error occurred.
-  ///
-  /// \param invalid Will be set true if an error occurs during validation.
+  /// generic signature.
   ///
   /// \returns the generic signature that captures the generic
   /// parameters and inferred requirements.
@@ -1053,26 +1047,23 @@ public:
                       GenericParamList *genericParams,
                       DeclContext *dc,
                       GenericSignature *outerSignature,
-                      std::function<bool(ArchetypeBuilder &)> inferRequirements,
-                      bool &invalid);
+                      bool allowConcreteGenericParams,
+                      std::function<void(ArchetypeBuilder &)> inferRequirements);
 
-  /// Finalize the given generic parameter list, assigning archetypes to
-  /// the generic parameters.
-  GenericEnvironment *finalizeGenericParamList(ArchetypeBuilder &builder,
-                                               GenericParamList *genericParams,
-                                               GenericSignature *genericSig,
-                                               DeclContext *dc);
+  /// Perform any final semantic checks on the given generic parameter list.
+  void finalizeGenericParamList(GenericParamList *genericParams,
+                                GenericSignature *genericSig,
+                                GenericEnvironment *genericEnv,
+                                DeclContext *dc);
 
   /// Validate the signature of a generic type.
   ///
   /// \param nominal The generic type.
-  ///
-  /// \returns true if an error occurred, or false otherwise.
-  bool validateGenericTypeSignature(GenericTypeDecl *nominal);
+  void validateGenericTypeSignature(GenericTypeDecl *nominal);
 
   /// Check the generic parameters in the given generic parameter list (and its
   /// parent generic parameter lists) according to the given resolver.
-  bool checkGenericParamList(ArchetypeBuilder *builder,
+  void checkGenericParamList(ArchetypeBuilder *builder,
                              GenericParamList *genericParams,
                              GenericSignature *parentSig,
                              GenericEnvironment *parentEnv,
@@ -1086,14 +1077,14 @@ public:
   /// \param noteLoc The location at which any notes will be printed.
   /// \param owner The type that owns the generic signature.
   /// \param genericSig The actual generic signature.
-  /// \param genericArgs The generic arguments.
+  /// \param substitutions Substitutions from interface types of the signature.
   ///
   /// \returns true if an error occurred, false otherwise.
   bool checkGenericArguments(DeclContext *dc, SourceLoc loc,
                              SourceLoc noteLoc,
                              Type owner,
                              GenericSignature *genericSig,
-                             ArrayRef<Type> genericArgs);
+                             const TypeSubstitutionMap &substitutions);
 
   /// Resolve the superclass of the given class.
   void resolveSuperclass(ClassDecl *classDecl) override;
@@ -1649,6 +1640,15 @@ public:
                          NominalTypeDecl *nominal,
                          AssociatedTypeDecl *assocType);
 
+  /// Record the witness information into the given conformance that maps
+  /// the given requirement to the given witness declaration.
+  ///
+  /// Use this routine only when the given witness is known to satisfy the
+  /// requirement, e.g., because the witness itself was synthesized. This
+  /// function is not allowed to fail.
+  void recordKnownWitness(NormalProtocolConformance *conformance,
+                          ValueDecl *req, ValueDecl *witness);
+
   /// Perform unqualified name lookup at the given source location
   /// within a particular declaration context.
   ///
@@ -1804,6 +1804,10 @@ public:
                           AssociatedTypeDecl *assocType) override;
   void resolveWitness(const NormalProtocolConformance *conformance,
                       ValueDecl *requirement) override;
+  ProtocolConformance *resolveInheritedConformance(
+                         const NormalProtocolConformance *conformance,
+                         ProtocolDecl *inherited) override;
+
   Type resolveMemberType(DeclContext *dc, Type type,
                          Identifier name) override;
 
@@ -1933,11 +1937,10 @@ public:
   /// Emits a diagnostic for a reference to a declaration that is deprecated.
   /// Callers can provide a lambda that adds additional information (such as a
   /// fixit hint) to the deprecation diagnostic, if it is emitted.
-  void diagnoseDeprecated(SourceRange SourceRange,
-                          const DeclContext *ReferenceDC,
-                          const AvailableAttr *Attr,
-                          DeclName Name,
-                          const ApplyExpr *Call);
+  void diagnoseIfDeprecated(SourceRange SourceRange,
+                            const DeclContext *ReferenceDC,
+                            const ValueDecl *DeprecatedDecl,
+                            const ApplyExpr *Call);
   /// @}
 
   /// If LangOptions::DebugForbidTypecheckPrefix is set and the given decl

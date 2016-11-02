@@ -17,6 +17,7 @@
 #include "swift/AST/AST.h"
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/Basic/Fallthrough.h"
 #include "swift/SIL/SILArgument.h"
@@ -61,9 +62,33 @@ emitBridgeNativeToObjectiveC(SILGenFunction &gen,
   auto witnessFnTy = witnessRef->getType();
 
   // Compute the substitutions.
-  ArrayRef<Substitution> substitutions =
-      swiftValueType->gatherAllSubstitutions(
-          gen.SGM.SwiftModule, nullptr);
+  ArrayRef<Substitution> witnessSubstitutions = witness.getSubstitutions();
+  ArrayRef<Substitution> typeSubstitutions =
+      swiftValueType->gatherAllSubstitutions(gen.SGM.SwiftModule, nullptr);
+
+  // FIXME: Witness substitutions get dropped via serialization, so we end up
+  // trying to reconstitute them here.
+  ArrayRef<Substitution> substitutions;
+  SmallVector<Substitution, 4> substitutionsBuf;
+  if (typeSubstitutions.empty()) {
+    substitutions = witnessSubstitutions;
+  } else if (witnessSubstitutions.empty()) {
+    substitutions = typeSubstitutions;
+  } else {
+    // FIXME: Substitute the type substitutions into the witness, because
+    // SpecializedProtocolConformance::getWitness() doesn't do it for us.
+    GenericEnvironment *witnessEnv = witness.getSyntheticEnvironment();
+    GenericSignature *witnessSig = witness.getSyntheticSignature();
+    
+    SubstitutionMap typeSubMap = witnessEnv
+      ->getSubstitutionMap(gen.SGM.SwiftModule,
+                           witnessSig,
+                           typeSubstitutions);
+    for (auto sub : witnessSubstitutions) {
+      substitutionsBuf.push_back(sub.subst(gen.SGM.SwiftModule, typeSubMap));
+    }
+    substitutions = substitutionsBuf;
+  }
 
   if (!substitutions.empty()) {
     // Substitute into the witness function type.
@@ -79,7 +104,8 @@ emitBridgeNativeToObjectiveC(SILGenFunction &gen,
   if (witnessFnTy.castTo<SILFunctionType>()->getParameters()[0].isIndirect()
       && !swiftValue.getType().isAddress()) {
     auto tmp = gen.emitTemporaryAllocation(loc, swiftValue.getType());
-    gen.B.createStore(loc, swiftValue.getValue(), tmp);
+    gen.B.emitStoreValueOperation(loc, swiftValue.getValue(), tmp,
+                                  StoreOwnershipQualifier::Init);
     swiftValue = ManagedValue::forUnmanaged(tmp);
   }
 
@@ -407,7 +433,8 @@ ManagedValue SILGenFunction::emitFuncToBlock(SILLocation loc,
   // Store the function to the block without claiming it, so that it still
   // gets cleaned up in scope. Copying the block will create an independent
   // reference.
-  B.createStore(loc, fn.getValue(), capture);
+  B.emitStoreValueOperation(loc, fn.getValue(), capture,
+                            StoreOwnershipQualifier::Init);
   auto invokeFn = B.createFunctionRef(loc, thunk);
   
   auto stackBlock = B.createInitBlockStorageHeader(loc, storage, invokeFn,
@@ -856,7 +883,7 @@ static SILValue emitObjCUnconsumedArgument(SILGenFunction &gen,
     return tmp;
   }
 
-  lowering.emitRetainValue(gen.B, loc, arg);
+  lowering.emitCopyValue(gen.B, loc, arg);
   return arg;
 }
 
