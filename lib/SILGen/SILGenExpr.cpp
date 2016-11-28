@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -59,7 +59,22 @@ ManagedValue SILGenFunction::emitManagedRetain(SILLocation loc,
     return ManagedValue::forUnmanaged(v);
   assert(!lowering.isAddressOnly() && "cannot retain an unloadable type");
 
-  lowering.emitCopyValue(B, loc, v);
+  v = lowering.emitCopyValue(B, loc, v);
+  return emitManagedRValueWithCleanup(v, lowering);
+}
+
+ManagedValue SILGenFunction::emitManagedLoadCopy(SILLocation loc, SILValue v) {
+  auto &lowering = getTypeLowering(v->getType().getSwiftRValueType());
+  return emitManagedLoadCopy(loc, v, lowering);
+}
+
+ManagedValue SILGenFunction::emitManagedLoadCopy(SILLocation loc, SILValue v,
+                                                 const TypeLowering &lowering) {
+  assert(lowering.getLoweredType().getAddressType() == v->getType());
+  v = lowering.emitLoadOfCopy(B, loc, v, IsNotTake);
+  if (lowering.isTrivial())
+    return ManagedValue::forUnmanaged(v);
+  assert(!lowering.isAddressOnly() && "cannot retain an unloadable type");
   return emitManagedRValueWithCleanup(v, lowering);
 }
 
@@ -430,7 +445,8 @@ emitRValueForDecl(SILLocation loc, ConcreteDeclRef declRef, Type ncRefType,
       selfSource = ArgumentSource(loc, std::move(metatypeRV));
     }
     return emitGetAccessor(loc, getter,
-                           ArrayRef<Substitution>(), std::move(selfSource),
+                           SGM.getNonMemberVarDeclSubstitutions(var),
+                           std::move(selfSource),
                            /*isSuper=*/false, isDirectAccessorUse,
                            RValue(), C);
   }
@@ -545,7 +561,7 @@ emitRValueWithAccessor(SILGenFunction &SGF, SILLocation loc,
   case AddressorKind::Owning:
   case AddressorKind::NativeOwning:
     // Emit the release immediately.
-    SGF.B.emitDestroyValueAndFold(loc, addressorResult.second.forward(SGF));
+    SGF.B.emitDestroyValueOperation(loc, addressorResult.second.forward(SGF));
     break;
   case AddressorKind::NativePinning:
     // Emit the unpin immediately.
@@ -813,7 +829,7 @@ RValue RValueEmitter::visitForceTryExpr(ForceTryExpr *E, SGFContext C) {
     SavedInsertionPoint scope(SGF, catchBB, FunctionSection::Postmatter);
 
     ASTContext &ctx = SGF.getASTContext();
-    auto error = catchBB->createBBArg(SILType::getExceptionType(ctx));
+    auto error = catchBB->createArgument(SILType::getExceptionType(ctx));
     SGF.B.createBuiltin(E, ctx.getIdentifier("unexpectedError"),
                         SGF.SGM.Types.getEmptyTupleType(), {}, {error});
     SGF.B.createUnreachable(E);
@@ -897,8 +913,8 @@ RValue RValueEmitter::visitOptionalTryExpr(OptionalTryExpr *E, SGFContext C) {
   // result type.
   SGF.B.emitBlock(catchBB);
   FullExpr catchCleanups(SGF.Cleanups, E);
-  auto *errorArg = catchBB->createBBArg(
-      SILType::getExceptionType(SGF.getASTContext()));
+  auto *errorArg =
+      catchBB->createArgument(SILType::getExceptionType(SGF.getASTContext()));
   (void) SGF.emitManagedRValueWithCleanup(errorArg);
   catchCleanups.pop();
 
@@ -916,7 +932,7 @@ RValue RValueEmitter::visitOptionalTryExpr(OptionalTryExpr *E, SGFContext C) {
   // If this was done in SSA registers, then the value is provided as an
   // argument to the block.
   if (!isByAddress) {
-    auto arg = contBB->createBBArg(optTL.getLoweredType());
+    auto arg = contBB->createArgument(optTL.getLoweredType());
     return RValue(SGF, E, SGF.emitManagedRValueWithCleanup(arg, optTL));
   }
 
@@ -2097,7 +2113,7 @@ static ManagedValue flattenOptional(SILGenFunction &SGF, SILLocation loc,
   if (resultTL.isAddressOnly())
     result = SGF.emitTemporaryAllocation(loc, resultTy);
   else
-    result = contBB->createBBArg(resultTy);
+    result = contBB->createArgument(resultTy);
 
   // Branch on whether the input is optional, this doesn't consume the value.
   auto isPresent = SGF.emitDoesOptionalHaveValue(loc, optVal.getValue());
@@ -2565,9 +2581,9 @@ RValue RValueEmitter::visitIfExpr(IfExpr *E, SGFContext C) {
     
     SILBasicBlock *cont = cond.complete(SGF);
     assert(cont && "no continuation block for if expr?!");
-    
-    SILValue result = cont->bbarg_begin()[0];
-    
+
+    SILValue result = cont->args_begin()[0];
+
     return RValue(SGF, E, SGF.emitManagedRValueWithCleanup(result));
   } else {
     // If the result is address-only, emit the result into a common stack buffer
@@ -3024,7 +3040,7 @@ RValue RValueEmitter::visitOptionalEvaluationExpr(OptionalEvaluationExpr *E,
   // If this was done in SSA registers, then the value is provided as an
   // argument to the block.
   if (!isByAddress) {
-    auto arg = new (SGF.SGM.M) SILArgument(contBB, optTL.getLoweredType());
+    auto arg = contBB->createArgument(optTL.getLoweredType());
     return RValue(SGF, E, SGF.emitManagedRValueWithCleanup(arg, optTL));
   }
   
@@ -3233,8 +3249,7 @@ public:
     auto strongType = SILType::getPrimitiveObjectType(
               unowned->getType().castTo<UnmanagedStorageType>().getReferentType());
     auto owned = gen.B.createUnmanagedToRef(loc, unowned, strongType);
-    gen.B.createCopyValue(loc, owned);
-    auto ownedMV = gen.emitManagedRValueWithCleanup(owned);
+    auto ownedMV = gen.emitManagedRetain(loc, owned);
     
     // Reassign the +1 storage with it.
     ownedMV.assignInto(gen, loc, base.getUnmanagedValue());
@@ -3243,8 +3258,8 @@ public:
   RValue get(SILGenFunction &gen, SILLocation loc,
              ManagedValue base, SGFContext c) && override {
     // Load the value at +0.
-    SILValue owned = gen.B.createLoad(loc, base.getUnmanagedValue(),
-                                      LoadOwnershipQualifier::Unqualified);
+    SILValue owned = gen.B.createLoadBorrow(loc, base.getUnmanagedValue());
+
     // Convert it to unowned.
     auto refType = owned->getType().getSwiftRValueType();
     auto unownedType = SILType::getPrimitiveObjectType(

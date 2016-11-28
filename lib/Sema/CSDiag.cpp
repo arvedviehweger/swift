@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1847,12 +1847,15 @@ bool CalleeCandidateInfo::diagnoseGenericParameterErrors(Expr *badArgExpr) {
     }
     
     for (auto proto : archetype->getConformsTo()) {
-      if (!CS->TC.conformsToProtocol(substitution, proto, CS->DC, ConformanceCheckOptions(TR_InExpression))) {
+      if (!CS->TC.conformsToProtocol(substitution, proto, CS->DC,
+                                     ConformanceCheckFlags::InExpression)) {
         if (substitution->isEqual(argType)) {
-          CS->TC.diagnose(badArgExpr->getLoc(), diag::cannot_convert_argument_value_protocol,
+          CS->TC.diagnose(badArgExpr->getLoc(),
+                          diag::cannot_convert_argument_value_protocol,
                           substitution, proto->getDeclaredType());
         } else {
-          CS->TC.diagnose(badArgExpr->getLoc(), diag::cannot_convert_partial_argument_value_protocol,
+          CS->TC.diagnose(badArgExpr->getLoc(),
+                          diag::cannot_convert_partial_argument_value_protocol,
                           argType, substitution, proto->getDeclaredType());
         }
         foundFailure = true;
@@ -2109,25 +2112,6 @@ static bool isConversionConstraint(const Constraint *C) {
   return C->getClassification() == ConstraintClassification::Relational;
 }
 
-/// Return true if this member constraint is a low priority for diagnostics, so
-/// low that we would only like to issue an error message about it if there is
-/// nothing else interesting we can scrape out of the constraint system.
-static bool isLowPriorityConstraint(Constraint *C) {
-  // If the member constraint is a ".Iterator" lookup to find the iterator
-  // type in a foreach loop, or a ".Element" lookup to find its element type,
-  // then it is very low priority: We will get a better and more useful
-  // diagnostic from the failed conversion to Sequence that will fail as well.
-  if (C->getKind() == ConstraintKind::TypeMember) {
-    if (auto *loc = C->getLocator())
-      for (auto Elt : loc->getPath())
-        if (Elt.getKind() == ConstraintLocator::GeneratorElementType ||
-            Elt.getKind() == ConstraintLocator::SequenceIteratorProtocol)
-          return true;
-  }
-
-  return false;
-}
-
 /// Attempt to diagnose a failure without taking into account the specific
 /// kind of expression that could not be type checked.
 bool FailureDiagnosis::diagnoseConstraintFailure() {
@@ -2148,9 +2132,6 @@ bool FailureDiagnosis::diagnoseConstraintFailure() {
   // This is a predicate that classifies constraints according to our
   // priorities.
   std::function<void (Constraint*)> classifyConstraint = [&](Constraint *C) {
-    if (isLowPriorityConstraint(C))
-      return rankedConstraints.push_back({C, CR_OtherConstraint});
-
     if (isMemberConstraint(C))
       return rankedConstraints.push_back({C, CR_MemberConstraint});
 
@@ -2383,6 +2364,7 @@ bool FailureDiagnosis::diagnoseGeneralMemberFailure(Constraint *constraint) {
   // Since the lookup was allowing inaccessible members, let's check
   // if it found anything of that sort, which is easy to diagnose.
   bool allUnavailable = !CS->TC.getLangOpts().DisableAvailabilityChecking;
+  bool allInaccessible = true;
   for (auto &member : result.ViableCandidates) {
     if (!member.isDecl()) {
       // if there is no declaration, this choice is implicitly available.
@@ -2396,30 +2378,29 @@ bool FailureDiagnosis::diagnoseGeneralMemberFailure(Constraint *constraint) {
       allUnavailable = false;
 
     if (decl->isAccessibleFrom(CS->DC))
-      continue;
-
-    if (auto *CD = dyn_cast<ConstructorDecl>(decl)) {
-      CS->TC.diagnose(anchor->getLoc(), diag::init_candidate_inaccessible,
-                      CD->getResultType(), decl->getFormalAccess());
-    } else {
-      CS->TC.diagnose(anchor->getLoc(), diag::candidate_inaccessible,
-                      decl->getName(), decl->getFormalAccess());
-    }
+      allInaccessible = false;
+  }
+  
+  // If no candidates were accessible, say so.
+  if (allInaccessible && !result.ViableCandidates.empty()) {
+    CS->TC.diagnose(anchor->getLoc(), diag::all_candidates_inaccessible,
+                    memberName);
 
     for (auto &candidate : result.ViableCandidates) {
       if (auto decl = candidate.getDecl()) {
-        CS->TC.diagnose(decl, diag::decl_declared_here, decl->getFullName());
+        CS->TC.diagnose(decl, diag::note_candidate_inaccessible,
+                        decl->getFullName(), decl->getFormalAccess());
       }
     }
 
     return true;
   }
 
-  // Diagnose 'super.init', which can only appear inside another initializer,
-  // specially.
   if (result.UnviableCandidates.empty() && isInitializer &&
       !baseObjTy->is<MetatypeType>()) {
     if (auto ctorRef = dyn_cast<UnresolvedDotExpr>(expr)) {
+      // Diagnose 'super.init', which can only appear inside another
+      // initializer, specially.
       if (isa<SuperRefExpr>(ctorRef->getBase())) {
         diagnose(anchor->getLoc(), diag::super_initializer_not_in_initializer);
         return true;
@@ -3038,16 +3019,16 @@ bool FailureDiagnosis::diagnoseGeneralConversionFailure(Constraint *constraint){
       return true;
     }
 
-    // Emit a conformance error through conformsToProtocol.  If this succeeds
-    // and yields a valid protocol conformance, then keep searching.
-    ProtocolConformance *Conformance = nullptr;
-    if (CS->TC.conformsToProtocol(fromType, PT->getDecl(), CS->DC,
-                                  ConformanceCheckFlags::InExpression,
-                                  &Conformance, expr->getLoc())) {
-      if (!Conformance || !Conformance->isInvalid()) {
+    // Emit a conformance error through conformsToProtocol.
+    if (auto conformance =
+          CS->TC.conformsToProtocol(fromType, PT->getDecl(), CS->DC,
+                                    ConformanceCheckFlags::InExpression,
+                                    expr->getLoc())) {
+      if (conformance->isAbstract() ||
+          !conformance->getConcrete()->isInvalid())
         return false;
-      }
     }
+
     return true;
   }
 
@@ -3632,15 +3613,15 @@ static Type isRawRepresentable(Type fromType,
   if (!rawReprType)
     return Type();
 
-  ProtocolConformance *conformance;
-  if (!CS->TC.conformsToProtocol(fromType, rawReprType, CS->DC,
-                                 ConformanceCheckFlags::InExpression,
-                                 &conformance))
+  auto conformance =
+    CS->TC.conformsToProtocol(fromType, rawReprType, CS->DC,
+                              ConformanceCheckFlags::InExpression);
+  if (!conformance)
     return Type();
 
   Type rawTy = ProtocolConformance::getTypeWitnessByName(fromType,
-                                                         conformance,
-                                  CS->getASTContext().getIdentifier("RawValue"),
+                                                         *conformance,
+                                              CS->getASTContext().Id_RawValue,
                                                          &CS->TC);
   return rawTy;
 }
@@ -3998,14 +3979,12 @@ bool FailureDiagnosis::diagnoseContextualConversionError() {
     auto &TC = CS->getTypeChecker();
     if (auto errorCodeProtocol =
             TC.Context.getProtocol(KnownProtocolKind::ErrorCodeProtocol)) {
-      ProtocolConformance *conformance = nullptr;
-      if (TC.conformsToProtocol(expr->getType(), errorCodeProtocol, CS->DC,
-                                ConformanceCheckFlags::InExpression,
-                                &conformance) &&
-          conformance) {
+      if (auto conformance =
+            TC.conformsToProtocol(expr->getType(), errorCodeProtocol, CS->DC,
+                                  ConformanceCheckFlags::InExpression)) {
         Type errorCodeType = expr->getType();
         Type errorType =
-          ProtocolConformance::getTypeWitnessByName(errorCodeType, conformance,
+          ProtocolConformance::getTypeWitnessByName(errorCodeType, *conformance,
                                                     TC.Context.Id_ErrorType,
                                                     &TC)->getCanonicalType();
         if (errorType) {
@@ -4703,6 +4682,7 @@ static bool diagnoseSingleCandidateFailures(CalleeCandidateInfo &CCI,
   // attempt to use matchCallArguments to diagnose the problem.
   class ArgumentDiagnostic : public MatchCallArgumentListener {
     TypeChecker &TC;
+    Expr *FnExpr;
     Expr *ArgExpr;
     llvm::SmallVectorImpl<CallArgParam> &Parameters;
     llvm::SmallVectorImpl<CallArgParam> &Arguments;
@@ -4718,11 +4698,13 @@ static bool diagnoseSingleCandidateFailures(CalleeCandidateInfo &CCI,
     SmallVector<ParamBinding, 4> Bindings;
 
   public:
-    ArgumentDiagnostic(Expr *argExpr,
+    ArgumentDiagnostic(Expr *fnExpr,
+                       Expr *argExpr,
                        llvm::SmallVectorImpl<CallArgParam> &params,
                        llvm::SmallVectorImpl<CallArgParam> &args,
                        CalleeCandidateInfo &CCI, bool isSubscript)
-        : TC(CCI.CS->TC), ArgExpr(argExpr), Parameters(params), Arguments(args),
+        : TC(CCI.CS->TC), FnExpr(fnExpr), ArgExpr(argExpr),
+          Parameters(params), Arguments(args),
           CandidateInfo(CCI), IsSubscript(isSubscript) {}
 
     void extraArgument(unsigned extraArgIdx) override {
@@ -4752,13 +4734,115 @@ static bool diagnoseSingleCandidateFailures(CalleeCandidateInfo &CCI,
     }
 
     void missingArgument(unsigned missingParamIdx) override {
-      Identifier name = Parameters[missingParamIdx].Label;
-      auto loc = ArgExpr->getStartLoc();
+      auto &param = Parameters[missingParamIdx];
+      Identifier name = param.Label;
+
+      // Search insertion index.
+      unsigned argIdx = 0;
+      for (int Idx = missingParamIdx - 1; Idx >= 0; --Idx) {
+        if (Bindings[Idx].empty()) continue;
+        argIdx = Bindings[Idx].back() + 1;
+        break;
+      }
+
+      unsigned insertableEndIdx = Arguments.size();
+      if (CandidateInfo.hasTrailingClosure)
+        insertableEndIdx -= 1;
+
+      // Build argument string for fix-it.
+      SmallString<32> insertBuf;
+      llvm::raw_svector_ostream insertText(insertBuf);
+
+      if (argIdx != 0)
+        insertText << ", ";
+      if (!name.empty())
+        insertText << name.str() << ": ";
+      Type Ty = param.Ty;
+      // Explode inout type.
+      if (auto IOT = param.Ty->getAs<InOutType>()) {
+        insertText << "&";
+        Ty = IOT->getObjectType();
+      }
+      // @autoclosure; the type should be the result type.
+      if (auto FT = param.Ty->getAs<AnyFunctionType>())
+        if (FT->isAutoClosure())
+          Ty = FT->getResult();
+      insertText << "<#" << Ty << "#>";
+      if (argIdx == 0 && insertableEndIdx != 0)
+        insertText << ", ";
+
+      SourceLoc insertLoc;
+      if (argIdx > insertableEndIdx) {
+        // Unreachable for now.
+        // FIXME: matchCallArguments() doesn't detect "missing argument after
+        // trailing closure". E.g.
+        //   func fn(x: Int, y: () -> Int, z: Int) { ... }
+        //   fn(x: 1) { return 1 }
+        // is diagnosed as "missing argument for 'y'" (missingParamIdx 1).
+        // It should be "missing argument for 'z'" (missingParamIdx 2).
+      } else if (auto *TE = dyn_cast<TupleExpr>(ArgExpr)) {
+        // fn():
+        //   fn([argMissing])
+        // fn(argX, argY):
+        //   fn([argMissing, ]argX, argY)
+        //   fn(argX[, argMissing], argY)
+        //   fn(argX, argY[, argMissing])
+        // fn(argX) { closure }:
+        //   fn([argMissing, ]argX) { closure }
+        //   fn(argX[, argMissing]) { closure }
+        //   fn(argX[, closureLabel: ]{closure}[, argMissing)] // Not impl.
+        if (insertableEndIdx == 0)
+          insertLoc = TE->getRParenLoc();
+        else if (argIdx != 0)
+          insertLoc = Lexer::getLocForEndOfToken(
+              TC.Context.SourceMgr, TE->getElement(argIdx - 1)->getEndLoc());
+        else {
+          insertLoc = TE->getElementNameLoc(0);
+          if (insertLoc.isInvalid())
+            insertLoc = TE->getElement(0)->getStartLoc();
+        }
+      } else if (auto *PE = dyn_cast<ParenExpr>(ArgExpr)) {
+        assert(argIdx <= 1);
+        if (PE->getRParenLoc().isValid()) {
+          // fn(argX):
+          //   fn([argMissing, ]argX)
+          //   fn(argX[, argMissing])
+          // fn() { closure }:
+          //   fn([argMissing]) {closure}
+          //   fn([closureLabel: ]{closure}[, argMissing]) // Not impl.
+          if (insertableEndIdx == 0)
+            insertLoc = PE->getRParenLoc();
+          else if (argIdx == 0)
+            insertLoc = PE->getSubExpr()->getStartLoc();
+          else
+            insertLoc = Lexer::getLocForEndOfToken(
+                TC.Context.SourceMgr, PE->getSubExpr()->getEndLoc());
+        } else {
+          // fn { closure }:
+          //   fn[(argMissing)] { closure }
+          //   fn[(closureLabel:] { closure }[, missingArg)]  // Not impl.
+          assert(!IsSubscript && "bracket less subscript");
+          assert(PE->hasTrailingClosure() &&
+                 "paren less ParenExpr without trailing closure");
+          insertBuf.insert(insertBuf.begin(), '(');
+          insertBuf.insert(insertBuf.end(), ')');
+          insertLoc = Lexer::getLocForEndOfToken(
+              TC.Context.SourceMgr, FnExpr->getEndLoc());
+        }
+      } else {
+        llvm_unreachable("unexpected argument expression type");
+        // Can't be TupleShuffleExpr because this argExpr is not yet resolved.
+      }
+
+      assert(insertLoc.isValid() && "missing argument after trailing closure?");
+
       if (name.empty())
-        TC.diagnose(loc, diag::missing_argument_positional,
-                    missingParamIdx + 1);
+        TC.diagnose(insertLoc, diag::missing_argument_positional,
+                    missingParamIdx + 1)
+          .fixItInsert(insertLoc, insertText.str());
       else
-        TC.diagnose(loc, diag::missing_argument_named, name);
+        TC.diagnose(insertLoc, diag::missing_argument_named, name)
+          .fixItInsert(insertLoc, insertText.str());
 
       auto candidate = CandidateInfo[0];
       if (candidate.getDecl())
@@ -4849,7 +4933,7 @@ static bool diagnoseSingleCandidateFailures(CalleeCandidateInfo &CCI,
     }
   };
 
-  return ArgumentDiagnostic(argExpr, params, args, CCI,
+  return ArgumentDiagnostic(fnExpr, argExpr, params, args, CCI,
                             isa<SubscriptExpr>(fnExpr))
       .diagnose();
 }
@@ -5458,7 +5542,9 @@ bool FailureDiagnosis::visitApplyExpr(ApplyExpr *callExpr) {
     if (calleeInfo.closeness == CC_ExactMatch)
       return true;
 
-    if (!CS->getContextualType() || calleeInfo.closeness != CC_ArgumentMismatch)
+    if (!CS->getContextualType() ||
+        (calleeInfo.closeness != CC_ArgumentMismatch &&
+         calleeInfo.closeness != CC_OneGenericArgumentMismatch))
       return false;
 
     CalleeCandidateInfo candidates(fnExpr, hasTrailingClosure, CS);
@@ -5959,7 +6045,8 @@ static bool isDictionaryLiteralCompatible(Type ty, ConstraintSystem *CS,
                               KnownProtocolKind::ExpressibleByDictionaryLiteral);
   if (!DLC) return false;
   return CS->TC.conformsToProtocol(ty, DLC, CS->DC,
-                                   ConformanceCheckFlags::InExpression);
+                                   ConformanceCheckFlags::InExpression)
+           .hasValue();
 }
 
 bool FailureDiagnosis::visitArrayExpr(ArrayExpr *E) {
@@ -5977,23 +6064,14 @@ bool FailureDiagnosis::visitArrayExpr(ArrayExpr *E) {
     // figure out what the contextual element type is in place.
     auto ALC = CS->TC.getProtocol(E->getLoc(),
                                   KnownProtocolKind::ExpressibleByArrayLiteral);
-    ProtocolConformance *Conformance = nullptr;
     if (!ALC)
       return visitExpr(E);
 
     // Check to see if the contextual type conforms.
-    bool typeConforms =
+    auto Conformance =
       CS->TC.conformsToProtocol(contextualType, ALC, CS->DC,
-                                ConformanceCheckFlags::InExpression,
-                                &Conformance);
-    (void) typeConforms;
+                                ConformanceCheckFlags::InExpression);
 
-    // The type can conform, but not have a concrete conformance, in
-    // which case Conformance will be nullptr, but typeConforms will
-    // still be true.
-    assert((!Conformance || typeConforms) &&
-           "Expected null Conformance if the type doesn't conform!");
-    
     // If not, we may have an implicit conversion going on.  If the contextual
     // type is an UnsafePointer or UnsafeMutablePointer, then that is probably
     // what is happening.
@@ -6006,12 +6084,9 @@ bool FailureDiagnosis::visitArrayExpr(ArrayExpr *E) {
       if (Type pointeeTy = unwrappedTy->getAnyPointerElementType(pointerKind)) {
         if (pointerKind == PTK_UnsafePointer) {
           auto arrayTy = ArraySliceType::get(pointeeTy);
-          typeConforms =
+          Conformance =
             CS->TC.conformsToProtocol(arrayTy, ALC, CS->DC,
-                                      ConformanceCheckFlags::InExpression,
-                                      &Conformance);
-          assert((!Conformance || typeConforms) &&
-                 "Expected null Conformance if the type doesn't conform!");
+                                      ConformanceCheckFlags::InExpression);
 
           if (Conformance)
             contextualType = arrayTy;
@@ -6047,18 +6122,12 @@ bool FailureDiagnosis::visitArrayExpr(ArrayExpr *E) {
       return true;
     }
 
-    Conformance->forEachTypeWitness(&CS->TC,
-                                    [&](AssociatedTypeDecl *ATD,
-                          const Substitution &subst, TypeDecl *d)->bool
-    {
-      if (ATD->getName().str() == "Element")
-        contextualElementType = subst.getReplacement()->getDesugaredType();
-      return false;
-    });
-    assert(contextualElementType &&
-           "Could not find 'Element' ArrayLiteral associated types from"
-           " contextual type conformance");
-
+    contextualElementType = ProtocolConformance::getTypeWitnessByName(
+                                                 contextualType,
+                                                 *Conformance,
+                                                 CS->getASTContext().Id_Element,
+                                                 &CS->TC)
+                              ->getDesugaredType();
     elementTypePurpose = CTP_ArrayElement;
   }
 
@@ -6094,25 +6163,29 @@ bool FailureDiagnosis::visitDictionaryExpr(DictionaryExpr *E) {
 
     // Validate the contextual type conforms to ExpressibleByDictionaryLiteral
     // and figure out what the contextual Key/Value types are in place.
-    ProtocolConformance *Conformance = nullptr;
-    if (!CS->TC.conformsToProtocol(contextualType, DLC, CS->DC,
-                                   ConformanceCheckFlags::InExpression,
-                                   &Conformance)) {
+    auto Conformance =
+      CS->TC.conformsToProtocol(contextualType, DLC, CS->DC,
+                                ConformanceCheckFlags::InExpression);
+    if (!Conformance) {
       diagnose(E->getStartLoc(), diag::type_is_not_dictionary, contextualType)
         .highlight(E->getSourceRange());
       return true;
     }
 
-    Conformance->forEachTypeWitness(&CS->TC,
-                                    [&](AssociatedTypeDecl *ATD,
-                          const Substitution &subst, TypeDecl *d)->bool
-    {
-      if (ATD->getName().str() == "Key")
-        contextualKeyType = subst.getReplacement()->getDesugaredType();
-      else if (ATD->getName().str() == "Value")
-        contextualValueType = subst.getReplacement()->getDesugaredType();
-      return false;
-    });
+    contextualKeyType =
+      ProtocolConformance::getTypeWitnessByName(contextualType,
+                                                *Conformance,
+                                                CS->getASTContext().Id_Key,
+                                                &CS->TC)
+        ->getDesugaredType();
+
+    contextualValueType =
+      ProtocolConformance::getTypeWitnessByName(contextualType,
+                                                *Conformance,
+                                                CS->getASTContext().Id_Value,
+                                                &CS->TC)
+        ->getDesugaredType();
+
     assert(contextualKeyType && contextualValueType &&
            "Could not find Key/Value DictionaryLiteral associated types from"
            " contextual type conformance");
@@ -6619,8 +6692,7 @@ static bool hasArchetype(const GenericTypeDecl *generic,
   if (!genericEnv)
     return false;
 
-  auto &map = genericEnv->getArchetypeToInterfaceMap();
-  return map.find(archetype) != map.end();
+  return genericEnv->containsPrimaryArchetype(archetype);
 }
 
 static void noteArchetypeSource(const TypeLoc &loc, ArchetypeType *archetype,
@@ -7097,7 +7169,6 @@ bool ConstraintSystem::salvage(SmallVectorImpl<Solution> &viable, Expr *expr) {
     // Set up solver state.
     SolverState state(*this);
     state.recordFixes = true;
-    this->solverState = &state;
 
     // Solve the system.
     solveRec(viable, FreeTypeVariableBinding::Disallow);
@@ -7138,9 +7209,6 @@ bool ConstraintSystem::salvage(SmallVectorImpl<Solution> &viable, Expr *expr) {
         return true;
       }
     }
-
-    // Remove the solver state.
-    this->solverState = nullptr;
 
     // Fall through to produce diagnostics.
   }

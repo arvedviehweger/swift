@@ -5,13 +5,14 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "swift/AST/AST.h"
 #include "swift/AST/DeclContext.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Types.h"
 #include "swift/Basic/SourceManager.h"
@@ -926,4 +927,27 @@ IterableDeclContext::castDeclToIterableDeclContext(const Decl *D) {
         static_cast<const IterableDeclContext*>(cast<ID##Decl>(D)));
 #include "swift/AST/DeclNodes.def"
   }
+}
+
+AccessScope::AccessScope(const DeclContext *DC, bool isPrivate)
+    : Value(DC, isPrivate) {
+  if (!DC || isa<ModuleDecl>(DC))
+    assert(!isPrivate && "public or internal scope can't be private");
+}
+
+bool AccessScope::isFileScope() const {
+  auto DC = getDeclContext();
+  return DC && isa<FileUnit>(DC);
+}
+
+Accessibility AccessScope::accessibilityForDiagnostics() const {
+  if (isPublic())
+    return Accessibility::Public;
+  if (isa<ModuleDecl>(getDeclContext()))
+    return Accessibility::Internal;
+  if (getDeclContext()->isModuleScopeContext()) {
+    return isPrivate() ? Accessibility::Private : Accessibility::FilePrivate;
+  }
+
+  return Accessibility::Private;
 }

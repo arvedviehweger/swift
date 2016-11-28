@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,13 +26,13 @@ using namespace swift;
 SILArgument::SILArgument(SILBasicBlock *ParentBB, SILType Ty,
                          const ValueDecl *D)
   : ValueBase(ValueKind::SILArgument, Ty), ParentBB(ParentBB), Decl(D) {
-  ParentBB->insertArgument(ParentBB->bbarg_end(), this);
+  ParentBB->insertArgument(ParentBB->args_end(), this);
 }
 
 SILArgument::SILArgument(SILBasicBlock *ParentBB,
-                         SILBasicBlock::bbarg_iterator Pos,
-                         SILType Ty, const ValueDecl *D)
-  : ValueBase(ValueKind::SILArgument, Ty), ParentBB(ParentBB), Decl(D) {
+                         SILBasicBlock::arg_iterator Pos, SILType Ty,
+                         const ValueDecl *D)
+    : ValueBase(ValueKind::SILArgument, Ty), ParentBB(ParentBB), Decl(D) {
   // Function arguments need to have a decl.
   assert(
     !ParentBB->getParent()->isBare() &&
@@ -65,6 +65,7 @@ static SILValue getIncomingValueForPred(const SILBasicBlock *BB,
   case TermKind::UnreachableInst:
   case TermKind::ReturnInst:
   case TermKind::ThrowInst:
+    llvm_unreachable("Have terminator that implies no successors?!");
   case TermKind::TryApplyInst:
   case TermKind::SwitchValueInst:
   case TermKind::SwitchEnumAddrInst:
@@ -184,5 +185,5 @@ bool SILArgument::isSelf() const {
   // Return true if we are the last argument of our BB and that our parent
   // function has a call signature with self.
   return getFunction()->hasSelfParam() &&
-         getParent()->getBBArgs().back() == this;
+         getParent()->getArguments().back() == this;
 }

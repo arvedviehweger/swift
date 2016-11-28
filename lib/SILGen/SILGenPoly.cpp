@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -335,8 +335,9 @@ static bool isProtocolClass(Type t) {
 static ManagedValue emitManagedLoad(SILGenFunction &gen, SILLocation loc,
                                     ManagedValue addr,
                                     const TypeLowering &addrTL) {
-  auto loadedValue = gen.B.createLoad(loc, addr.forward(gen),
-                                      LoadOwnershipQualifier::Unqualified);
+  // SEMANTIC ARC TODO: When the verifier is finished, revisit this.
+  auto loadedValue = addrTL.emitLoad(gen.B, loc, addr.forward(gen),
+                                     LoadOwnershipQualifier::Take);
   return gen.emitManagedRValueWithCleanup(loadedValue, addrTL);
 }
 
@@ -738,7 +739,7 @@ static ManagedValue manageParam(SILGenFunction &gen,
   // Unowned parameters are only guaranteed at the instant of the call, so we
   // must retain them even if we're in a context that can accept a +0 value.
   case ParameterConvention::Direct_Unowned:
-    gen.getTypeLowering(paramValue->getType())
+    paramValue = gen.getTypeLowering(paramValue->getType())
         .emitCopyValue(gen.B, loc, paramValue);
     SWIFT_FALLTHROUGH;
   case ParameterConvention::Direct_Owned:
@@ -769,14 +770,15 @@ void SILGenFunction::collectThunkParams(SILLocation loc,
   // Add the indirect results.
   for (auto result : F.getLoweredFunctionType()->getIndirectResults()) {
     auto paramTy = F.mapTypeIntoContext(result.getSILType());
-    (void) new (SGM.M) SILArgument(F.begin(), paramTy);
+    SILArgument *arg = F.begin()->createArgument(paramTy);
+    (void)arg;
   }
 
   // Add the parameters.
   auto paramTypes = F.getLoweredFunctionType()->getParameters();
   for (auto param : paramTypes) {
     auto paramTy = F.mapTypeIntoContext(param.getSILType());
-    auto paramValue = new (SGM.M) SILArgument(F.begin(), paramTy);
+    auto paramValue = F.begin()->createArgument(paramTy);
     auto paramMV = manageParam(*this, loc, paramValue, param, allowPlusZero);
     params.push_back(paramMV);
   }
@@ -1387,7 +1389,7 @@ public:
             SmallVectorImpl<SILValue> &innerIndirectResultAddrs) {
     // Assert that the indirect results are set up like we expect.
     assert(innerIndirectResultAddrs.empty());
-    assert(Gen.F.begin()->bbarg_size() >= outerFnType->getNumIndirectResults());
+    assert(Gen.F.begin()->args_size() >= outerFnType->getNumIndirectResults());
 
     innerIndirectResultAddrs.reserve(innerFnType->getNumIndirectResults());
 
@@ -1493,7 +1495,8 @@ private:
 
     SILValue resultAddr;
     if (result.isIndirect()) {
-      resultAddr = Gen.F.begin()->getBBArg(data.NextOuterIndirectResultIndex++);
+      resultAddr =
+          Gen.F.begin()->getArgument(data.NextOuterIndirectResultIndex++);
     }
 
     return { result, resultAddr };
@@ -2121,8 +2124,7 @@ void ResultPlanner::execute(ArrayRef<SILValue> innerDirectResults,
                        "reabstraction of returns_inner_pointer function");
       SWIFT_FALLTHROUGH;
     case ResultConvention::Unowned:
-      resultTL.emitCopyValue(Gen.B, Loc, resultValue);
-      return Gen.emitManagedRValueWithCleanup(resultValue, resultTL);
+      return Gen.emitManagedRetain(Loc, resultValue, resultTL);
     }
     llvm_unreachable("bad result convention!");
   };
@@ -2183,8 +2185,9 @@ void ResultPlanner::execute(ArrayRef<SILValue> innerDirectResults,
 
     case Operation::DirectToIndirect: {
       auto result = claimNextInnerDirectResult(op.InnerResult);
-      Gen.B.createStore(Loc, result.forward(Gen), op.OuterResultAddr,
-                        StoreOwnershipQualifier::Unqualified);
+      Gen.B.emitStoreValueOperation(Loc, result.forward(Gen),
+                                    op.OuterResultAddr,
+                                    StoreOwnershipQualifier::Init);
       continue;
     }
 
@@ -2192,8 +2195,8 @@ void ResultPlanner::execute(ArrayRef<SILValue> innerDirectResults,
       auto resultAddr = op.InnerResultAddr;
       auto &resultTL = Gen.getTypeLowering(resultAddr->getType());
       auto result = Gen.emitManagedRValueWithCleanup(
-          Gen.B.createLoad(Loc, resultAddr,
-                           LoadOwnershipQualifier::Unqualified),
+          resultTL.emitLoad(Gen.B, Loc, resultAddr,
+                            LoadOwnershipQualifier::Take),
           resultTL);
       addOuterDirectResult(result, op.OuterResult);
       continue;

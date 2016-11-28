@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -721,9 +721,9 @@ public:
   Decl *importMirroredDecl(const clang::NamedDecl *decl, DeclContext *dc,
                            bool useSwift2Name, ProtocolDecl *proto);
 
-  /// \brief Utility function for building simple generic signatures.
-  std::pair<GenericSignature *, GenericEnvironment *>
-  buildGenericSignature(GenericParamList *genericParams, DeclContext *dc);
+  /// \brief Utility function for building simple generic environments.
+  GenericEnvironment *buildGenericEnvironment(GenericParamList *genericParams,
+                                              DeclContext *dc);
 
   /// \brief Import the given Clang declaration context into Swift.
   ///

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -873,12 +873,17 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           else if (auto ext = dyn_cast<ExtensionDecl>(DC))
             dcGenericParams = ext->getGenericParams();
 
-          if (dcGenericParams) {
+          while (dcGenericParams) {
             namelookup::FindLocalVal localVal(SM, Loc, Consumer);
             localVal.checkGenericParams(dcGenericParams);
 
             if (!Results.empty())
               return;
+
+            if (!isa<ExtensionDecl>(DC))
+              break;
+
+            dcGenericParams = dcGenericParams->getOuterParameters();
           }
         }
 

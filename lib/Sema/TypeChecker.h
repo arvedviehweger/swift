@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,6 +18,7 @@
 #define TYPECHECKING_H
 
 #include "swift/Sema/TypeCheckRequest.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/AST.h"
 #include "swift/AST/AnyFunctionRef.h"
 #include "swift/AST/Availability.h"
@@ -490,7 +491,7 @@ public:
   /// during type checking.
   llvm::SetVector<NominalTypeDecl *> ValidatedTypes;
 
-  using TypeAccessScopeCacheMap = llvm::DenseMap<Type, const DeclContext *>;
+  using TypeAccessScopeCacheMap = llvm::DenseMap<Type, AccessScope>;
 
   /// Caches the outermost scope where a particular type can be used, relative
   /// to a particular file.
@@ -743,9 +744,8 @@ public:
   void checkUnsupportedProtocolType(Stmt *stmt);
 
   /// Expose TypeChecker's handling of GenericParamList to SIL parsing.
-  std::pair<GenericSignature *, GenericEnvironment *>
-  handleSILGenericParams(GenericParamList *genericParams,
-                         DeclContext *DC);
+  GenericEnvironment *handleSILGenericParams(GenericParamList *genericParams,
+                                             DeclContext *DC);
 
   /// \brief Resolves a TypeRepr to a type.
   ///
@@ -1011,12 +1011,13 @@ public:
                                  ExtensionDecl *protocolExtension) override;
 
   /// Configure the interface type of a function declaration.
-  void configureInterfaceType(AbstractFunctionDecl *func);
+  void configureInterfaceType(AbstractFunctionDecl *func,
+                              GenericSignature *sig);
 
   /// Validate the signature of a generic function.
   ///
   /// \param func The generic function.
-  void validateGenericFuncSignature(AbstractFunctionDecl *func);
+  GenericSignature *validateGenericFuncSignature(AbstractFunctionDecl *func);
 
   /// Revert the signature of a generic function to its pre-type-checked state,
   /// so that it can be type checked again when we have resolved its generic
@@ -1164,6 +1165,7 @@ public:
   /// property.
   void completePropertyBehaviorAccessors(VarDecl *VD,
                                      VarDecl *ValueImpl,
+                                     Type valueTy,
                                      ArrayRef<Substitution> SelfInterfaceSubs,
                                      ArrayRef<Substitution> SelfContextSubs);
 
@@ -1499,7 +1501,7 @@ public:
   ///
   /// \return the witness type, or null if an error occurs.
   Type getWitnessType(Type type, ProtocolDecl *protocol,
-                      ProtocolConformance *conformance,
+                      ProtocolConformanceRef conformance,
                       Identifier name,
                       Diag<> brokenProtocolDiag);
 
@@ -1514,14 +1516,14 @@ public:
   ///
   /// \param name The name of the method to call.
   ///
-  /// \param arguments The arguments to
+  /// \param arguments The arguments to the witness.
   ///
   /// \param brokenProtocolDiag Diagnostic to emit if the protocol is broken.
   ///
   /// \returns a fully type-checked call, or null if the protocol was broken.
   Expr *callWitness(Expr *base, DeclContext *dc,
                     ProtocolDecl *protocol,
-                    ProtocolConformance *conformance,
+                    ProtocolConformanceRef conformance,
                     DeclName name,
                     MutableArrayRef<Expr *> arguments,
                     Diag<> brokenProtocolDiag);
@@ -1533,27 +1535,12 @@ public:
   ///
   /// \param options Options that control the conformance check.
   ///
-  /// \param Conformance If non-NULL, and the type does conform to the given
-  /// protocol, this will be set to the protocol conformance mapping that
-  /// maps the given type \c T to the protocol \c Proto. The mapping may be
-  /// NULL, if the mapping is trivial due to T being either an archetype or
-  /// an existential type that directly implies conformance to \c Proto.
-  ///
-  /// \param ComplainLoc If valid, then this function will emit diagnostics if
-  /// T does not conform to the given protocol. The primary diagnostic will
-  /// be placed at this location, with notes for each of the protocol
-  /// requirements not satisfied.
-  ///
-  /// \returns true if T conforms to the protocol Proto, false otherwise.
-  ///
-  /// \note If this method returns 'true', it only means that there exists a
-  /// declared conformance of \c T to \c Proto. It does not mean that this
-  /// conformance is valid. Check \c (*Conformance)->getState() for that.
-  bool containsProtocol(Type T, ProtocolDecl *Proto,
-                        DeclContext *DC,
-                        ConformanceCheckOptions options,
-                        ProtocolConformance **Conformance = nullptr,
-                        SourceLoc ComplainLoc = SourceLoc());
+  /// \returns the conformance, if \c T conforms to the protocol \c Proto, or
+  /// an empty optional.
+  Optional<ProtocolConformanceRef> containsProtocol(
+                                     Type T, ProtocolDecl *Proto,
+                                     DeclContext *DC,
+                                     ConformanceCheckOptions options);
 
   /// \brief Determine whether the given type conforms to the given protocol.
   ///
@@ -1565,26 +1552,19 @@ public:
   ///
   /// \param options Options that control the conformance check.
   ///
-  /// \param Conformance If non-NULL, and the type does conform to the given
-  /// protocol, this will be set to the protocol conformance mapping that
-  /// maps the given type \c T to the protocol \c Proto. The mapping may be
-  /// NULL, if the mapping is trivial due to T being either an archetype or
-  /// an existential type that directly implies conformance to \c Proto.
-  ///
   /// \param ComplainLoc If valid, then this function will emit diagnostics if
   /// T does not conform to the given protocol. The primary diagnostic will
   /// be placed at this location, with notes for each of the protocol
   /// requirements not satisfied.
   ///
-  /// \returns true if T conforms to the protocol Proto, false otherwise.
-  ///
-  /// \note If this method returns 'true', it only means that there exists a
-  /// declared conformance of \c T to \c Proto. It does not mean that this
-  /// conformance is valid. Check \c (*Conformance)->getState() for that.
-  bool conformsToProtocol(Type T, ProtocolDecl *Proto, DeclContext *DC,
-                          ConformanceCheckOptions options,
-                          ProtocolConformance **Conformance = nullptr,
-                          SourceLoc ComplainLoc = SourceLoc());
+  /// \returns The protocol conformance, if \c T conforms to the
+  /// protocol \c Proto, or \c None.
+  Optional<ProtocolConformanceRef> conformsToProtocol(
+                                     Type T,
+                                     ProtocolDecl *Proto,
+                                     DeclContext *DC,
+                                     ConformanceCheckOptions options,
+                                     SourceLoc ComplainLoc = SourceLoc());
 
   /// Completely check the given conformance.
   void checkConformance(NormalProtocolConformance *conformance);

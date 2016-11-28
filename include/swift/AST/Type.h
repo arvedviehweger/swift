@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -42,6 +42,7 @@ class NormalProtocolConformance;
 enum OptionalTypeKind : unsigned;
 class ProtocolDecl;
 class StructDecl;
+class SubstitutableType;
 class SubstitutionMap;
 class TypeBase;
 class Type;
@@ -49,7 +50,7 @@ class TypeWalker;
 
 /// \brief Type substitution mapping from substitutable types to their
 /// replacements.
-typedef llvm::DenseMap<TypeBase *, Type> TypeSubstitutionMap;
+typedef llvm::DenseMap<SubstitutableType *, Type> TypeSubstitutionMap;
 
 /// Flags that can be passed when substituting into a type.
 enum class SubstFlags {

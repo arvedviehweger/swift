@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -331,7 +331,7 @@ size_t camel_case::findWord(StringRef string, StringRef word) {
 
     // If any of the following checks fail, we want to start searching
     // past the end of the match.  (This assumes that the word doesn't
-    // end with a prefix of itself, e.g. "LikeableLike".)
+    // end with a prefix of itself, e.g. "LikableLike".)
     startingIndex = index + word.size();
 
     // We assume that we don't have to check if the match starts a new

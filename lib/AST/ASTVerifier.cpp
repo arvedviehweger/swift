@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/Subsystems.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/ArchetypeBuilder.h"
 #include "swift/AST/AST.h"
 #include "swift/AST/ASTContext.h"
@@ -446,8 +447,7 @@ struct ASTNodeBase {};
           // Get the primary archetype.
           auto *parent = archetype->getPrimary();
 
-          auto &map = GenericEnv.back()->getArchetypeToInterfaceMap();
-          if (map.find(parent) == map.end()) {
+          if (!GenericEnv.back()->containsPrimaryArchetype(parent)) {
             Out << "AST verification error: archetype "
                 << archetype->getString() << " not allowed in this context\n";
 
@@ -639,7 +639,7 @@ struct ASTNodeBase {};
 
       if (D->hasAccessibility()) {
         PrettyStackTraceDecl debugStack("verifying access", D);
-        if (D->getFormalAccessScope() == nullptr &&
+        if (D->getFormalAccessScope().isPublic() &&
             D->getFormalAccess() < Accessibility::Public) {
           Out << "non-public decl has no formal access scope\n";
           D->dump(Out);
@@ -1916,20 +1916,8 @@ struct ASTNodeBase {};
         return;
 
       if (sig && env) {
-        auto &map = env->getInterfaceToArchetypeMap();
-        if (sig->getGenericParams().size() != map.size()) {
-          Out << "Mismatch between signature and environment parameter count\n";
-          abort();
-        }
-
         for (auto *paramTy : sig->getGenericParams()) {
-          auto found = map.find(paramTy->getCanonicalType().getPointer());
-          if (found == map.end()) {
-            Out << "Generic parameter present in signature but not "
-                   "in environment\n";
-            paramTy->dump();
-            abort();
-          }
+          (void)env->mapTypeIntoContext(paramTy);
         }
 
         return;

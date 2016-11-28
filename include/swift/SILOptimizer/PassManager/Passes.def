@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -127,6 +127,8 @@ PASS(GlobalOpt, "global-opt",
      "Global variable optimizations")
 PASS(GlobalPropertyOpt, "global-property-opt",
      "Optimize properties")
+PASS(GuaranteedARCOpts, "guaranteed-arc-opts",
+     "Guaranteed ARC optimizations")
 PASS(HighLevelCSE, "high-level-cse",
      "Common subexpression elimination on High-level SIL")
 PASS(HighLevelLICM, "high-level-licm",

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -763,8 +763,7 @@ void swift::addTrivialAccessorsToStorage(AbstractStorageDecl *storage,
 
   // Synthesize and type-check the body of the getter.
   synthesizeTrivialGetter(getter, storage, TC);
-  TC.typeCheckDecl(getter, true);
-  TC.typeCheckDecl(getter, false);
+  TC.validateDecl(getter);
 
   if (setter) {
     if (isDynamic)
@@ -772,8 +771,7 @@ void swift::addTrivialAccessorsToStorage(AbstractStorageDecl *storage,
 
     // Synthesize and type-check the body of the setter.
     synthesizeTrivialSetter(setter, storage, setterValueParam, TC);
-    TC.typeCheckDecl(setter, true);
-    TC.typeCheckDecl(setter, false);
+    TC.validateDecl(setter);
   }
 
   auto *DC = storage->getDeclContext();
@@ -1392,7 +1390,6 @@ void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
                      TypeLoc::withoutLoc(SubstBodyResultTy), DC);
 
   Parameter->setInterfaceType(SubstInterfaceTy);
-  Parameter->setGenericSignature(genericSig);
   Parameter->setGenericEnvironment(genericEnv);
 
   // Mark the method to be final, implicit, and private.  In a class, this
@@ -1440,11 +1437,11 @@ void TypeChecker::completePropertyBehaviorParameter(VarDecl *VD,
 
 void TypeChecker::completePropertyBehaviorAccessors(VarDecl *VD,
                                        VarDecl *ValueImpl,
+                                       Type valueTy,
                                        ArrayRef<Substitution> SelfInterfaceSubs,
                                        ArrayRef<Substitution> SelfContextSubs) {
   auto selfTy = SelfContextSubs[0].getReplacement();
-  auto valueTy = SelfContextSubs[1].getReplacement();
-  
+
   SmallVector<ASTNode, 3> bodyStmts;
   
   auto makeSelfExpr = [&](FuncDecl *fromAccessor,
@@ -2123,9 +2120,8 @@ swift::createDesignatedInitOverride(TypeChecker &tc,
   auto selfType = configureImplicitSelf(tc, ctor);
 
   // Set the interface type of the initializer.
-  ctor->setGenericSignature(classDecl->getGenericSignatureOfContext());
   ctor->setGenericEnvironment(classDecl->getGenericEnvironmentOfContext());
-  tc.configureInterfaceType(ctor);
+  tc.configureInterfaceType(ctor, ctor->getGenericSignature());
 
   // Set the contextual type of the initializer. This will go away one day.
   configureConstructorType(ctor, selfType, bodyParams->getType(ctx));

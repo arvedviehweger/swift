@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -228,6 +228,15 @@ bool StackPromoter::tryPromoteAlloc(AllocRefInst *ARI) {
   if (!canPromoteAlloc(ARI, AllocInsertionPoint, DeallocInsertionPoint))
     return false;
 
+  if (AllocInsertionPoint) {
+    // Check if any operands of the alloc_ref prevents us from moving the
+    // instruction.
+    for (const Operand &Op : ARI->getAllOperands()) {
+      if (!DT->properlyDominates(Op.get(), AllocInsertionPoint))
+        return false;
+    }
+  }
+
   DEBUG(llvm::dbgs() << "Promoted " << *ARI);
   DEBUG(llvm::dbgs() << "    in " << ARI->getFunction()->getName() << '\n');
   NumStackPromoted++;
@@ -407,7 +416,7 @@ SILInstruction *StackPromoter::findDeallocPoint(SILInstruction *StartInst,
       Iter = StartInst->getIterator();
     } else {
       // Track all uses in the block arguments.
-      for (SILArgument *BBArg : BB->getBBArgs()) {
+      for (SILArgument *BBArg : BB->getArguments()) {
         if (ConGraph->isUsePoint(BBArg, Node))
           NumUsePointsToFind--;
       }

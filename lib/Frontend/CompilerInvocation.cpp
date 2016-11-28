@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -804,9 +804,6 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableExperimentalPropertyBehaviors |=
     Args.hasArg(OPT_enable_experimental_property_behaviors);
 
-  Opts.EnableExperimentalNestedGenericTypes |=
-    Args.hasArg(OPT_enable_experimental_nested_generic_types);
-
   Opts.EnableClassResilience |=
     Args.hasArg(OPT_enable_class_resilience);
 
@@ -820,6 +817,8 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     Opts.EnableAccessControl
       = A->getOption().matches(OPT_enable_access_control);
   }
+
+  Opts.DisableTypoCorrection |= Args.hasArg(OPT_disable_typo_correction);
 
   Opts.CodeCompleteInitsInPostfixExpr |=
       Args.hasArg(OPT_code_complete_inits_in_postfix_expr);
@@ -1029,7 +1028,7 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
   Opts.WarningsAsErrors |= Args.hasArg(OPT_warnings_as_errors);
 
   assert(!(Opts.WarningsAsErrors && Opts.SuppressWarnings) &&
-         "conflicting arguments; should of been caught by driver");
+         "conflicting arguments; should have been caught by driver");
 
   return false;
 }

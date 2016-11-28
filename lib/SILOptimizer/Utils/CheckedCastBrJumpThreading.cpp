@@ -1,3 +1,15 @@
+//===--- CheckedCastBrJumpThreading.cpp -----------------------------------===//
+//
+// This source file is part of the Swift.org open source project
+//
+// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
+
 #define DEBUG_TYPE "sil-simplify-cfg"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -200,7 +212,7 @@ SILValue CheckedCastBrJumpThreading::isArgValueEquivalentToCondition(
       if (Def != Value)
         return SILValue();
 
-      if (!DT->dominates(DomBB, Value->getParentBB()))
+      if (!DT->dominates(DomBB, Value->getParentBlock()))
         return SILValue();
       // OK, this value is a potential candidate
     }
@@ -618,8 +630,8 @@ bool CheckedCastBrJumpThreading::trySimplify(CheckedCastBranchInst *CCBI) {
 
     // Record what we want to change.
     Edit *edit = new (EditAllocator.Allocate())
-      Edit(BB, InvertSuccess, SuccessPreds, FailurePreds, numUnknownPreds != 0,
-           DomCCBI->getSuccessBB()->getBBArg(0));
+        Edit(BB, InvertSuccess, SuccessPreds, FailurePreds,
+             numUnknownPreds != 0, DomCCBI->getSuccessBB()->getArgument(0));
     Edits.push_back(edit);
 
     return true;
@@ -632,7 +644,7 @@ bool CheckedCastBrJumpThreading::trySimplify(CheckedCastBranchInst *CCBI) {
 /// Optimize the checked_cast_br instructions in a function.
 void CheckedCastBrJumpThreading::optimizeFunction() {
 
-  // We separate the work in two phases: analyse and transform. This avoids
+  // We separate the work in two phases: analyze and transform. This avoids
   // re-calculating the dominator tree for each optimized checked_cast_br.
 
   // First phase: analysis.

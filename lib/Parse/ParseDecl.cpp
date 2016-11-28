@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1741,6 +1741,31 @@ bool Parser::isStartOfDecl() {
   if (Tok.is(tok::kw_try))
     return peekToken().isAny(tok::kw_let, tok::kw_var);
   
+  // Look through attribute list, because it may be an *type* attribute list.
+  if (Tok.is(tok::at_sign)) {
+    BacktrackingScope backtrack(*this);
+    while (consumeIf(tok::at_sign)) {
+      // If not identifier or code complete token, consider '@' as an incomplete
+      // attribute.
+      if (Tok.isNot(tok::identifier, tok::code_complete))
+        continue;
+      consumeToken();
+      // Eat paren after attribute name; e.g. @foo(x)
+      if (consumeIf(tok::l_paren)) {
+        while (Tok.isNot(tok::r_brace, tok::eof, tok::pound_endif)) {
+          if (consumeIf(tok::r_paren)) break;
+          skipSingle();
+        }
+      }
+    }
+    // If this attribute is the last element in the block,
+    // consider it is a start of incomplete decl.
+    if (Tok.isAny(tok::r_brace, tok::eof, tok::pound_endif))
+      return true;
+
+    return isStartOfDecl();
+  }
+
   // Otherwise, the only hard case left is the identifier case.
   if (Tok.isNot(tok::identifier)) return true;
 
@@ -3102,8 +3127,7 @@ static FuncDecl *createAccessorFunc(SourceLoc DeclLoc, ParameterList *param,
       return new (P->Context) FixedTypeRepr(type, SourceLoc());
     };
     auto makePairType = [&](TypeRepr *fst, TypeRepr *snd) -> TypeRepr* {
-      return TupleTypeRepr::create(P->Context, {fst, snd}, SourceRange(),
-                                   SourceLoc(), 2);
+      return TupleTypeRepr::create(P->Context, {fst, snd}, SourceRange());
     };
 
     switch (addressorKind) {
@@ -4687,17 +4711,17 @@ ParserResult<EnumDecl> Parser::parseDeclEnum(ParseDeclOptions Flags,
       return makeParserCodeCompletionStatus();
   }
 
-  EnumDecl *UD = new (Context) EnumDecl(EnumLoc, EnumName, EnumNameLoc,
+  EnumDecl *ED = new (Context) EnumDecl(EnumLoc, EnumName, EnumNameLoc,
                                         { }, GenericParams, CurDeclContext);
-  setLocalDiscriminator(UD);
-  UD->getAttrs() = Attributes;
+  setLocalDiscriminator(ED);
+  ED->getAttrs() = Attributes;
 
   // Parse optional inheritance clause within the context of the enum.
   if (Tok.is(tok::colon)) {
-    ContextChange CC(*this, UD);
+    ContextChange CC(*this, ED);
     SmallVector<TypeLoc, 2> Inherited;
     Status |= parseInheritance(Inherited, /*classRequirementLoc=*/nullptr);
-    UD->setInherited(Context.AllocateCopy(Inherited));
+    ED->setInherited(Context.AllocateCopy(Inherited));
   }
 
   diagnoseWhereClauseInGenericParamList(GenericParams);
@@ -4707,7 +4731,7 @@ ParserResult<EnumDecl> Parser::parseDeclEnum(ParseDeclOptions Flags,
     auto whereStatus = parseFreestandingGenericWhereClause(GenericParams);
     if (whereStatus.shouldStopParsing())
       return whereStatus;
-    UD->setGenericParams(GenericParams);
+    ED->setGenericParams(GenericParams);
   }
 
   SourceLoc LBLoc, RBLoc;
@@ -4716,20 +4740,20 @@ ParserResult<EnumDecl> Parser::parseDeclEnum(ParseDeclOptions Flags,
     RBLoc = LBLoc;
     Status.setIsParseError();
   } else {
-    ContextChange CC(*this, UD);
+    ContextChange CC(*this, ED);
     Scope S(this, ScopeKind::ClassBody);
     ParseDeclOptions Options(PD_HasContainerType | PD_AllowEnumElement | PD_InEnum);
     if (parseNominalDeclMembers(LBLoc, RBLoc,
                                 diag::expected_rbrace_enum,
-                                Options, [&] (Decl *D) { UD->addMember(D); }))
+                                Options, [&] (Decl *D) { ED->addMember(D); }))
       Status.setIsParseError();
   }
 
-  UD->setBraces({LBLoc, RBLoc});
+  ED->setBraces({LBLoc, RBLoc});
 
-  addToScope(UD);
+  addToScope(ED);
 
-  return DCC.fixupParserResult(Status, UD);
+  return DCC.fixupParserResult(Status, ED);
 }
 
 /// \brief Parse a 'case' of an enum.
@@ -5612,17 +5636,25 @@ ParserResult<PrecedenceGroupDecl>
 Parser::parseDeclPrecedenceGroup(ParseDeclOptions flags,
                                  DeclAttributes &attributes) {
   SourceLoc precedenceGroupLoc = consumeToken(tok::kw_precedencegroup);
+  DebuggerContextChange DCC (*this);
+
+  if (!CodeCompletion && !DCC.movedToTopLevel() && !(flags & PD_AllowTopLevel))
+  {
+    diagnose(precedenceGroupLoc, diag::decl_inner_scope);
+    return nullptr;
+  }
 
   Identifier name;
   SourceLoc nameLoc;
   if (parseIdentifier(name, nameLoc, diag::expected_precedencegroup_name)) {
     // If the identifier is missing or a keyword or something, try to skip
     // skip the entire body.
-    if (consumeIf(tok::l_brace) ||
-        (peekToken().is(tok::l_brace), consumeToken(),
-         consumeIf(tok::l_brace))) {
+    if (consumeIf(tok::l_brace)) {
       skipUntilDeclRBrace();
       (void) consumeIf(tok::r_brace);
+    } else if (Tok.isNot(tok::eof) && peekToken().is(tok::l_brace)) {
+      consumeToken();
+      skipBracedBlock(*this);
     }
     return nullptr;
   }

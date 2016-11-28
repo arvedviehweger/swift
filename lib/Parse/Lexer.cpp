@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1899,6 +1899,15 @@ static const char *findStartOfLine(const char *bufStart, const char *current) {
   }
 
   return current;
+}
+
+SourceLoc Lexer::getLocForStartOfToken(SourceManager &SM, SourceLoc Loc) {
+  Optional<unsigned> BufferIdOp = SM.getIDForBufferIdentifier(SM.
+    getBufferIdentifierForLoc(Loc));
+  if (!BufferIdOp.hasValue())
+    return SourceLoc();
+  return getLocForStartOfToken(SM, BufferIdOp.getValue(),
+    SM.getLocOffsetInBuffer(Loc, BufferIdOp.getValue()));
 }
 
 SourceLoc Lexer::getLocForStartOfToken(SourceManager &SM, unsigned BufferID,

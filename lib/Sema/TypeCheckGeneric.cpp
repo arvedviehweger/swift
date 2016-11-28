@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,6 +24,14 @@ using namespace swift;
 
 Type DependentGenericTypeResolver::resolveGenericTypeParamType(
                                      GenericTypeParamType *gp) {
+  auto gpDecl = gp->getDecl();
+  assert(gpDecl && "Missing generic parameter declaration");
+
+  // Hack: See parseGenericParameters(). When the issue there is fixed,
+  // we won't need the isInvalid() check anymore.
+  if (gpDecl->isInvalid())
+    return ErrorType::get(gpDecl->getASTContext());
+
   // Don't resolve generic parameters.
   return gp;
 }
@@ -113,8 +121,10 @@ Type PartialGenericTypeToArchetypeResolver::resolveGenericTypeParamType(
 
   // Hack: See parseGenericParameters(). When the issue there is fixed,
   // we won't need the isInvalid() check anymore.
-  if (gpDecl->isInvalid() ||
-      !gpDecl->getDeclContext()->isValidGenericContext())
+  if (gpDecl->isInvalid())
+    return ErrorType::get(gpDecl->getASTContext());
+
+  if (!gpDecl->getDeclContext()->isValidGenericContext())
     return Type(gp);
 
   auto *genericEnv = gpDecl->getDeclContext()->getGenericEnvironmentOfContext();
@@ -159,6 +169,14 @@ PartialGenericTypeToArchetypeResolver::resolveTypeOfDecl(TypeDecl *decl) {
 
 Type CompleteGenericTypeResolver::resolveGenericTypeParamType(
                                               GenericTypeParamType *gp) {
+  auto gpDecl = gp->getDecl();
+  assert(gpDecl && "Missing generic parameter declaration");
+
+  // Hack: See parseGenericParameters(). When the issue there is fixed,
+  // we won't need the isInvalid() check anymore.
+  if (gpDecl->isInvalid())
+    return ErrorType::get(gpDecl->getASTContext());
+
   // Retrieve the potential archetype corresponding to this generic type
   // parameter.
   // FIXME: When generic parameters can map down to specific types, do so
@@ -191,7 +209,8 @@ Type CompleteGenericTypeResolver::resolveDependentMemberType(
                 baseTy, ref->getIdentifier(), newName)
       .fixItReplace(ref->getIdLoc(), newName.str());
     ref->overwriteIdentifier(newName);
-
+    nestedPA->setAlreadyDiagnosedRename();
+    
     // Go get the actual nested type.
     nestedPA = basePA->getNestedType(newName, Builder);
     assert(!nestedPA->wasRenamed());
@@ -457,7 +476,26 @@ static Type getResultType(TypeChecker &TC, FuncDecl *fn, Type resultType) {
   return resultType;
 }
 
-void TypeChecker::validateGenericFuncSignature(AbstractFunctionDecl *func) {
+/// Determine whether the given type is \c Self, an associated type of \c Self,
+/// or a concrete type.
+static bool isSelfDerivedOrConcrete(Type type) {
+  // Check for a concrete type.
+  if (!type->hasTypeParameter())
+    return true;
+
+  // Unwrap dependent member types.
+  while (auto depMem = type->getAs<DependentMemberType>()) {
+    type = depMem->getBase();
+  }
+
+  if (auto gp = type->getAs<GenericTypeParamType>())
+    return gp->getDepth() == 0 && gp->getIndex() == 0;
+
+  return false;
+}
+
+GenericSignature *
+TypeChecker::validateGenericFuncSignature(AbstractFunctionDecl *func) {
   bool invalid = false;
 
   // Create the archetype builder.
@@ -472,7 +510,7 @@ void TypeChecker::validateGenericFuncSignature(AbstractFunctionDecl *func) {
   // If this triggered a recursive validation, back out: we're done.
   // FIXME: This is an awful hack.
   if (func->hasType())
-    return;
+    return nullptr;
 
   // Finalize the generic requirements.
   (void)builder.finalize(func->getLoc());
@@ -484,10 +522,44 @@ void TypeChecker::validateGenericFuncSignature(AbstractFunctionDecl *func) {
   CompleteGenericTypeResolver completeResolver(*this, builder);
   if (checkGenericFuncSignature(*this, nullptr, func, completeResolver))
     invalid = true;
+  if (builder.diagnoseRemainingRenames(func->getLoc()))
+    invalid = true;
 
   // The generic function signature is complete and well-formed. Determine
   // the type of the generic function.
   auto sig = builder.getGenericSignature();
+
+  // For a generic requirement in a protocol, make sure that the requirement
+  // set didn't add any requirements to Self or its associated types.
+  if (!invalid && func->getGenericParams() &&
+      isa<ProtocolDecl>(func->getDeclContext())) {
+    auto proto = cast<ProtocolDecl>(func->getDeclContext());
+    for (auto req : sig->getRequirements()) {
+      // If one of the types in the requirement is dependent on a non-Self
+      // type parameter, this requirement is okay.
+      if (!isSelfDerivedOrConcrete(req.getFirstType()) ||
+          !isSelfDerivedOrConcrete(req.getSecondType()))
+        continue;
+
+      // The conformance of 'Self' to the protocol is okay.
+      if (req.getKind() == RequirementKind::Conformance &&
+          req.getSecondType()->getAs<ProtocolType>()->getDecl() == proto &&
+          req.getFirstType()->is<GenericTypeParamType>())
+        continue;
+
+      diagnose(func,
+               Context.LangOpts.EffectiveLanguageVersion[0] >= 4
+                 ? diag::requirement_restricts_self
+                 : diag::requirement_restricts_self_swift3,
+               func->getDescriptiveKind(), func->getFullName(),
+               req.getFirstType().getString(),
+               static_cast<unsigned>(req.getKind()),
+               req.getSecondType().getString());
+
+      if (Context.LangOpts.EffectiveLanguageVersion[0] >= 4)
+        invalid = true;
+    }
+  }
 
   // Debugging of the archetype builder and generic signature generation.
   if (Context.LangOpts.DebugGenericSignatures) {
@@ -502,22 +574,21 @@ void TypeChecker::validateGenericFuncSignature(AbstractFunctionDecl *func) {
     llvm::errs() << "\n";
   }
 
-  func->setGenericSignature(sig);
-
   if (invalid) {
     func->overwriteType(ErrorType::get(Context));
     func->setInterfaceType(ErrorType::get(Context));
-    return;
+    // null doesn't mean error here: callers still expect the signature.
+    return sig;
   }
 
-  configureInterfaceType(func);
+  configureInterfaceType(func, sig);
+  return sig;
 }
 
-void TypeChecker::configureInterfaceType(AbstractFunctionDecl *func) {
+void TypeChecker::configureInterfaceType(AbstractFunctionDecl *func,
+                                         GenericSignature *sig) {
   Type funcTy;
   Type initFuncTy;
-
-  auto *sig = func->getGenericSignature();
 
   if (auto fn = dyn_cast<FuncDecl>(func)) {
     funcTy = fn->getBodyResultTypeLoc().getType();
@@ -683,6 +754,7 @@ GenericSignature *TypeChecker::validateGenericSignature(
   CompleteGenericTypeResolver completeResolver(*this, builder);
   checkGenericParamList(nullptr, genericParams, nullptr,
                         nullptr, &completeResolver);
+  (void)builder.diagnoseRemainingRenames(genericParams->getSourceRange().Start);
 
   // Record the generic type parameter types and the requirements.
   auto sig = builder.getGenericSignature();
@@ -830,9 +902,7 @@ void TypeChecker::validateGenericTypeSignature(GenericTypeDecl *typeDecl) {
   auto *dc = typeDecl->getDeclContext();
 
   if (!gp) {
-    auto *parentSig = dc->getGenericSignatureOfContext();
     auto *parentEnv = dc->getGenericEnvironmentOfContext();
-    typeDecl->setGenericSignature(parentSig);
     typeDecl->setGenericEnvironment(parentEnv);
     return;
   }
@@ -842,8 +912,6 @@ void TypeChecker::validateGenericTypeSignature(GenericTypeDecl *typeDecl) {
                                        nullptr);
   assert(sig->getInnermostGenericParams().size()
            == typeDecl->getGenericParams()->size());
-  typeDecl->setGenericSignature(sig);
-
   revertGenericParamList(gp);
 
   ArchetypeBuilder builder =
@@ -852,7 +920,7 @@ void TypeChecker::validateGenericTypeSignature(GenericTypeDecl *typeDecl) {
   auto *parentEnv = dc->getGenericEnvironmentOfContext();
   checkGenericParamList(&builder, gp, parentSig, parentEnv, nullptr);
 
-  auto *env = builder.getGenericEnvironment();
+  auto *env = builder.getGenericEnvironment(sig);
   typeDecl->setGenericEnvironment(env);
 
   finalizeGenericParamList(gp, sig, env, typeDecl);
@@ -970,7 +1038,7 @@ bool TypeChecker::checkGenericArguments(DeclContext *dc, SourceLoc loc,
       // FIXME: Do we really need "used" at this point?
       // FIXME: Poor location information. How much better can we do here?
       if (!conformsToProtocol(firstType, proto->getDecl(), dc,
-                              ConformanceCheckFlags::Used, nullptr, loc)) {
+                              ConformanceCheckFlags::Used, loc)) {
         return true;
       }
 
@@ -1006,9 +1074,6 @@ bool TypeChecker::checkGenericArguments(DeclContext *dc, SourceLoc loc,
         return true;
       }
       continue;
-      
-    case RequirementKind::WitnessMarker:
-      continue;
     }
   }
 
@@ -1016,12 +1081,13 @@ bool TypeChecker::checkGenericArguments(DeclContext *dc, SourceLoc loc,
 }
 
 Type TypeChecker::getWitnessType(Type type, ProtocolDecl *protocol,
-                                 ProtocolConformance *conformance,
+                                 ProtocolConformanceRef conformance,
                                  Identifier name,
                                  Diag<> brokenProtocolDiag) {
   Type ty = ProtocolConformance::getTypeWitnessByName(type, conformance,
                                                       name, this);
-  if (!ty && !conformance->isInvalid())
+  if (!ty &&
+      !(conformance.isConcrete() && conformance.getConcrete()->isInvalid()))
     diagnose(protocol->getLoc(), brokenProtocolDiag);
 
   return ty;

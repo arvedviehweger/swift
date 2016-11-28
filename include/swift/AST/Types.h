@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -809,12 +809,6 @@ public:
   /// For a ReferenceStorageType like @unowned, this returns the referent.
   /// Otherwise, it returns the type itself.
   Type getReferenceStorageReferent();
-
-  /// This is to check the pre-condition of calling
-  /// getMemberSubstitutions(const DeclContext *dc)
-  /// The function checks whether the given context can be treated as a part
-  /// of the type.
-  bool canTreatContextAsMember(const DeclContext *dc);
 
   /// Determine the set of substitutions that should be applied to a
   /// type spelled within the given DeclContext to treat it as a
@@ -3763,13 +3757,6 @@ protected:
     : TypeBase(K, C, properties) { }
 
 public:
-  /// \brief Retrieve the name of this type.
-  Identifier getName() const;
-
-  /// \brief Retrieve the parent of this type, or null if this is a
-  /// primary type.
-  SubstitutableType *getParent() const;
-
   // Implement isa/cast/dyncast/etc.
   static bool classof(const TypeBase *T) {
     return T->getKind() >= TypeKind::First_SubstitutableType &&
@@ -3789,9 +3776,6 @@ class ArchetypeType final : public SubstitutableType,
   friend TrailingObjects;
 
 public:
-  typedef llvm::PointerUnion<AssociatedTypeDecl *, ProtocolDecl *>
-    AssocTypeOrProtocolType;
-  
   /// A nested type. Either a dependent associated archetype, or a concrete
   /// type (which may be a bound archetype from an outer context).
   class NestedType {
@@ -3838,7 +3822,7 @@ private:
   Type Superclass;
 
   llvm::PointerUnion<ArchetypeType *, TypeBase *> ParentOrOpened;
-  AssocTypeOrProtocolType AssocTypeOrProto;
+  AssociatedTypeDecl *AssocType;
   Identifier Name;
   unsigned isRecursive: 1;
   MutableArrayRef<std::pair<Identifier, NestedType>> NestedTypes;
@@ -3858,7 +3842,7 @@ public:
   /// The ConformsTo array will be copied into the ASTContext by this routine.
   static CanTypeWrapper<ArchetypeType>
                         getNew(const ASTContext &Ctx, ArchetypeType *Parent,
-                               AssocTypeOrProtocolType AssocTypeOrProto,
+                               AssociatedTypeDecl *AssocType,
                                Identifier Name, ArrayRef<Type> ConformsTo,
                                Type Superclass,
                                bool isRecursive = false);
@@ -3869,7 +3853,7 @@ public:
   /// by this routine.
   static CanTypeWrapper<ArchetypeType>
                         getNew(const ASTContext &Ctx, ArchetypeType *Parent,
-                               AssocTypeOrProtocolType AssocTypeOrProto,
+                               AssociatedTypeDecl *AssocType,
                                Identifier Name,
                                SmallVectorImpl<ProtocolDecl *> &ConformsTo,
                                Type Superclass,
@@ -3917,15 +3901,9 @@ public:
   /// be a member of one of the protocols to which the parent archetype
   /// conforms.
   AssociatedTypeDecl *getAssocType() const {
-    return AssocTypeOrProto.dyn_cast<AssociatedTypeDecl *>();
+    return AssocType;
   }
 
-  /// Retrieve the protocol for which this archetype describes the 'Self'
-  /// parameter.
-  ProtocolDecl *getSelfProtocol() const {
-    return AssocTypeOrProto.dyn_cast<ProtocolDecl *>();
-  }
-  
   /// getConformsTo - Retrieve the set of protocols to which this substitutable
   /// type shall conform.
   ArrayRef<ProtocolDecl *> getConformsTo() const { return ConformsTo; }
@@ -3941,12 +3919,6 @@ public:
   /// \brief Return true if the archetype has any requirements at all.
   bool hasRequirements() const {
     return !getConformsTo().empty() || getSuperclass();
-  }
-
-  /// Retrieve either the associated type or the protocol to which this
-  /// associated type corresponds.
-  AssocTypeOrProtocolType getAssocTypeOrProtocol() const {
-    return AssocTypeOrProto;
   }
 
   /// \brief Retrieve the nested type with the given name.
@@ -4005,14 +3977,14 @@ public:
   
 private:
   ArchetypeType(const ASTContext &Ctx, ArchetypeType *Parent,
-                AssocTypeOrProtocolType AssocTypeOrProto,
+                AssociatedTypeDecl *AssocType,
                 Identifier Name, ArrayRef<ProtocolDecl *> ConformsTo,
                 Type Superclass,
                 bool isRecursive = false)
     : SubstitutableType(TypeKind::Archetype, &Ctx,
                         RecursiveTypeProperties::HasArchetype),
       ConformsTo(ConformsTo), Superclass(Superclass), ParentOrOpened(Parent),
-      AssocTypeOrProto(AssocTypeOrProto), Name(Name),
+      AssocType(AssocType), Name(Name),
       isRecursive(isRecursive) { }
 
   ArchetypeType(const ASTContext &Ctx, 
@@ -4025,6 +3997,7 @@ private:
                           RecursiveTypeProperties::HasOpenedExistential)),
       ConformsTo(ConformsTo), Superclass(Superclass),
       ParentOrOpened(Existential.getPointer()),
+      AssocType(nullptr),
       isRecursive(isRecursive) { }
 };
 BEGIN_CAN_TYPE_WRAPPER(ArchetypeType, SubstitutableType)
@@ -4033,29 +4006,10 @@ CanArchetypeType getParent() const {
 }
 END_CAN_TYPE_WRAPPER(ArchetypeType, SubstitutableType)
 
-/// Abstract class used to describe the type of a generic type parameter
-/// or associated type.
-///
-/// \sa AbstractTypeParamDecl
-class AbstractTypeParamType : public SubstitutableType {
-protected:
-  AbstractTypeParamType(TypeKind kind, const ASTContext *ctx,
-                        RecursiveTypeProperties properties)
-    : SubstitutableType(kind, ctx, properties) { }
-
-public:
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const TypeBase *T) {
-    return T->getKind() >= TypeKind::First_AbstractTypeParamType &&
-           T->getKind() <= TypeKind::Last_AbstractTypeParamType;
-  }
-};
-DEFINE_EMPTY_CAN_TYPE_WRAPPER(AbstractTypeParamType, SubstitutableType)
-
 /// Describes the type of a generic parameter.
 ///
 /// \sa GenericTypeParamDecl
-class GenericTypeParamType : public AbstractTypeParamType {
+class GenericTypeParamType : public SubstitutableType {
   using DepthIndexTy = llvm::PointerEmbeddedInt<unsigned, 31>;
 
   /// The generic type parameter or depth/index.
@@ -4108,28 +4062,28 @@ private:
   friend class GenericTypeParamDecl;
 
   explicit GenericTypeParamType(GenericTypeParamDecl *param)
-    : AbstractTypeParamType(TypeKind::GenericTypeParam, nullptr,
-                            RecursiveTypeProperties::HasTypeParameter),
+    : SubstitutableType(TypeKind::GenericTypeParam, nullptr,
+                        RecursiveTypeProperties::HasTypeParameter),
       ParamOrDepthIndex(param) { }
 
   explicit GenericTypeParamType(unsigned depth,
                                 unsigned index,
                                 const ASTContext &ctx)
-    : AbstractTypeParamType(TypeKind::GenericTypeParam, &ctx,
-                            RecursiveTypeProperties::HasTypeParameter),
+    : SubstitutableType(TypeKind::GenericTypeParam, &ctx,
+                        RecursiveTypeProperties::HasTypeParameter),
       ParamOrDepthIndex(depth << 16 | index) { }
 };
-BEGIN_CAN_TYPE_WRAPPER(GenericTypeParamType, AbstractTypeParamType)
+BEGIN_CAN_TYPE_WRAPPER(GenericTypeParamType, SubstitutableType)
   static CanGenericTypeParamType get(unsigned depth, unsigned index,
                                      const ASTContext &C) {
     return CanGenericTypeParamType(GenericTypeParamType::get(depth, index, C));
   }
-END_CAN_TYPE_WRAPPER(GenericTypeParamType, AbstractTypeParamType)
+END_CAN_TYPE_WRAPPER(GenericTypeParamType, SubstitutableType)
 
 /// Describes the type of an associated type.
 ///
 /// \sa AssociatedTypeDecl
-class AssociatedTypeType : public AbstractTypeParamType {
+class AssociatedTypeType : public TypeBase {
   /// The generic type parameter.
   AssociatedTypeDecl *AssocType;
 
@@ -4151,11 +4105,10 @@ private:
   // These aren't classified as dependent for some reason.
 
   AssociatedTypeType(AssociatedTypeDecl *assocType)
-    : AbstractTypeParamType(TypeKind::AssociatedType, nullptr,
-                            RecursiveTypeProperties()),
+    : TypeBase(TypeKind::AssociatedType, nullptr, RecursiveTypeProperties()),
       AssocType(assocType) { }
 };
-DEFINE_EMPTY_CAN_TYPE_WRAPPER(AssociatedTypeType, AbstractTypeParamType)
+DEFINE_EMPTY_CAN_TYPE_WRAPPER(AssociatedTypeType, Type)
 
 /// SubstitutedType - A type that has been substituted for some other type,
 /// which implies that the replacement type meets all of the requirements of
@@ -4667,22 +4620,6 @@ ParameterTypeFlags::fromParameterType(Type paramTy, bool isVariadic) {
   bool escaping = paramTy->is<AnyFunctionType>() &&
                   !paramTy->castTo<AnyFunctionType>()->isNoEscape();
   return {isVariadic, autoclosure, escaping};
-}
-
-inline Identifier SubstitutableType::getName() const {
-  if (auto Archetype = dyn_cast<ArchetypeType>(this))
-    return Archetype->getName();
-  if (auto GenericParam = dyn_cast<GenericTypeParamType>(this))
-    return GenericParam->getName();
-
-  llvm_unreachable("Not a substitutable type");
-}
-
-inline SubstitutableType *SubstitutableType::getParent() const {
-  if (auto Archetype = dyn_cast<ArchetypeType>(this))
-    return Archetype->getParent();
-
-  return nullptr;
 }
 
 inline CanType Type::getCanonicalTypeOrNull() const {

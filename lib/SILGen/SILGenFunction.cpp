@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -279,7 +279,7 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         }
       
         // Just retain a by-val let.
-        B.emitCopyValueOperation(loc, Val);
+        Val = B.emitCopyValueOperation(loc, Val);
       } else {
         // If we have a mutable binding for a 'let', such as 'self' in an
         // 'init' method, load it.
@@ -321,8 +321,7 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         if (canGuarantee) {
           capturedArgs.push_back(ManagedValue::forUnmanaged(vl.box));
         } else {
-          B.createCopyValue(loc, vl.box);
-          capturedArgs.push_back(emitManagedRValueWithCleanup(vl.box));
+          capturedArgs.push_back(emitManagedRetain(loc, vl.box));
         }
         escapesToMark.push_back(vl.value);
       } else {
@@ -336,8 +335,9 @@ void SILGenFunction::emitCaptures(SILLocation loc,
         // since we could conceivably forward the copied value into the
         // closure context and pass it down to the partially applied function
         // in-place.
-        AllocBoxInst *allocBox =
-          B.createAllocBox(loc, vl.value->getType().getObjectType());
+        auto boxTy = SILBoxType::get(vl.value->getType().getSwiftRValueType());
+        
+        AllocBoxInst *allocBox = B.createAllocBox(loc, boxTy);
         ProjectBoxInst *boxAddress = B.createProjectBox(loc, allocBox, 0);
         B.createCopyAddr(loc, vl.value, boxAddress, IsNotTake,IsInitialization);
         capturedArgs.push_back(emitManagedRValueWithCleanup(allocBox));
@@ -498,8 +498,8 @@ void SILGenFunction::emitClosure(AbstractClosureExpr *ace) {
 
 void SILGenFunction::emitArtificialTopLevel(ClassDecl *mainClass) {
   // Load argc and argv from the entry point arguments.
-  SILValue argc = F.begin()->getBBArg(0);
-  SILValue argv = F.begin()->getBBArg(1);
+  SILValue argc = F.begin()->getArgument(0);
+  SILValue argv = F.begin()->getArgument(1);
 
   switch (mainClass->getArtificialMainKind()) {
   case ArtificialMainKind::UIApplicationMain: {
@@ -690,7 +690,7 @@ static void forwardCaptureArgs(SILGenFunction &gen,
                                SmallVectorImpl<SILValue> &args,
                                CapturedValue capture) {
   auto addSILArgument = [&](SILType t, ValueDecl *d) {
-    args.push_back(new (gen.SGM.M) SILArgument(gen.F.begin(), t, d));
+    args.push_back(gen.F.begin()->createArgument(t, d));
   };
 
   auto *vd = capture.getDecl();
@@ -786,8 +786,8 @@ void SILGenFunction::emitCurryThunk(ValueDecl *vd,
            && "currying constructor at level other than one?!");
     F.setBare(IsBare);
     auto selfMetaTy = vd->getType()->getAs<AnyFunctionType>()->getInput();
-    auto metatypeVal = new (F.getModule()) SILArgument(F.begin(),
-                                            getLoweredLoadableType(selfMetaTy));
+    auto metatypeVal =
+        F.begin()->createArgument(getLoweredLoadableType(selfMetaTy));
     curriedArgs.push_back(metatypeVal);
 
   } else if (auto fd = dyn_cast<AbstractFunctionDecl>(vd)) {
@@ -815,8 +815,7 @@ void SILGenFunction::emitCurryThunk(ValueDecl *vd,
   ArrayRef<Substitution> subs;
   auto constantInfo = getConstantInfo(to);
   if (auto *env = constantInfo.GenericEnv) {
-    auto sig = constantInfo.SILFnType->getGenericSignature();
-    subs = env->getForwardingSubstitutions(SGM.SwiftModule, sig);
+    subs = env->getForwardingSubstitutions(SGM.SwiftModule);
   }
 
   SILValue toFn = getNextUncurryLevelRef(*this, vd, to, from.isDirectReference,

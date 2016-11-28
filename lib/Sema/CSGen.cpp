@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1690,17 +1690,11 @@ namespace {
                        locator);
       
       // Its subexpression should be convertible to a tuple (T.Element...).
-      // FIXME: We should really go through the conformance above to extract
-      // the element type, rather than just looking for the element type.
-      // FIXME: Member constraint is still weird here.
-      ConstraintLocatorBuilder builder(locator);
-      auto arrayElementTy = CS.getMemberType(arrayTy, elementAssocTy,
-                                             builder.withPathElement(
-                                               ConstraintLocator::Member),
-                                             /*options=*/0);
+      Type arrayElementTy = DependentMemberType::get(arrayTy, elementAssocTy);
 
       // Introduce conversions from each element to the element type of the
       // array.
+      ConstraintLocatorBuilder builder(locator);
       unsigned index = 0;
       for (auto element : expr->getElements()) {
         CS.addConstraint(ConstraintKind::Conversion,
@@ -1758,18 +1752,10 @@ namespace {
 
       // Its subexpression should be convertible to a tuple ((T.Key,T.Value)...).
       ConstraintLocatorBuilder locatorBuilder(locator);
-      auto dictionaryKeyTy = CS.getMemberType(dictionaryTy,
-                                              keyAssocTy,
-                                              locatorBuilder.withPathElement(
-                                                ConstraintLocator::Member),
-                                              /*options=*/0);
-      /// FIXME: ArrayElementType is a total hack here.
-      auto dictionaryValueTy = CS.getMemberType(dictionaryTy,
-                                                valueAssocTy,
-                                                locatorBuilder.withPathElement(
-                                                  ConstraintLocator::ArrayElementType),
-                                                /*options=*/0);
-      
+      auto dictionaryKeyTy = DependentMemberType::get(dictionaryTy,
+                                                      keyAssocTy);
+      auto dictionaryValueTy = DependentMemberType::get(dictionaryTy,
+                                                        valueAssocTy);
       TupleTypeElt tupleElts[2] = { TupleTypeElt(dictionaryKeyTy),
                                     TupleTypeElt(dictionaryValueTy) };
       Type elementTy = TupleType::get(tupleElts, C);
@@ -2469,7 +2455,10 @@ namespace {
 
     Type visitForcedCheckedCastExpr(ForcedCheckedCastExpr *expr) {
       auto &tc = CS.getTypeChecker();
-      
+      auto fromExpr = expr->getSubExpr();
+      if (!fromExpr) // Either wasn't constructed correctly or wasn't folded.
+        return nullptr;
+
       // Validate the resulting type.
       TypeResolutionOptions options = TR_AllowUnboundGenerics;
       options |= TR_InExpression;
@@ -2481,8 +2470,8 @@ namespace {
                                 CS.getConstraintLocator(expr));
       expr->getCastTypeLoc().setType(toType, /*validated=*/true);
 
-      auto fromType = expr->getSubExpr()->getType();
-      auto locator = CS.getConstraintLocator(expr->getSubExpr());
+      auto fromType = fromExpr->getType();
+      auto locator = CS.getConstraintLocator(fromExpr);
 
       // The source type can be checked-cast to the destination type.
       CS.addConstraint(ConstraintKind::CheckedCast, fromType, toType, locator);
@@ -2531,6 +2520,9 @@ namespace {
 
     Type visitConditionalCheckedCastExpr(ConditionalCheckedCastExpr *expr) {
       auto &tc = CS.getTypeChecker();
+      auto fromExpr = expr->getSubExpr();
+      if (!fromExpr) // Either wasn't constructed correctly or wasn't folded.
+        return nullptr;
 
       // Validate the resulting type.
       TypeResolutionOptions options = TR_AllowUnboundGenerics;
@@ -2543,8 +2535,8 @@ namespace {
                                 CS.getConstraintLocator(expr));
       expr->getCastTypeLoc().setType(toType, /*validated=*/true);
 
-      auto fromType = expr->getSubExpr()->getType();
-      auto locator = CS.getConstraintLocator(expr->getSubExpr());
+      auto fromType = fromExpr->getType();
+      auto locator = CS.getConstraintLocator(fromExpr);
       CS.addConstraint(ConstraintKind::CheckedCast, fromType, toType, locator);
       return OptionalType::get(toType);
     }
@@ -3084,7 +3076,10 @@ bool swift::isExtensionApplied(DeclContext &DC, Type BaseTy,
   ConstraintSystemOptions Options;
   NominalTypeDecl *Nominal = BaseTy->getNominalOrBoundGenericNominal();
   if (!Nominal || !BaseTy->isSpecialized() ||
-      ED->getGenericRequirements().empty())
+      ED->getGenericRequirements().empty() ||
+      // We'll crash if we leak type variables from one constraint
+      // system into the new one created below.
+      BaseTy->hasTypeVariable())
     return true;
   std::unique_ptr<TypeChecker> CreatedTC;
   // If the current ast context has no type checker, create one for it.
@@ -3130,8 +3125,6 @@ bool swift::isExtensionApplied(DeclContext &DC, Type BaseTy,
       case RequirementKind::SameType:
         createMemberConstraint(Req, ConstraintKind::Equal);
         break;
-      case RequirementKind::WitnessMarker:
-        break;
     }
   }
   if (Failed)
@@ -3144,6 +3137,9 @@ bool swift::isExtensionApplied(DeclContext &DC, Type BaseTy,
 static bool canSatisfy(Type T1, Type T2, DeclContext &DC, ConstraintKind Kind,
                        bool ReplaceArchetypeWithVariables,
                        bool AllowFreeVariables) {
+  assert(!T1->hasTypeVariable() && !T2->hasTypeVariable() &&
+         "Unexpected type variable in constraint satisfaction testing");
+
   std::unique_ptr<TypeChecker> CreatedTC;
   // If the current ast context has no type checker, create one for it.
   auto *TC = static_cast<TypeChecker*>(DC.getASTContext().getLazyResolver());

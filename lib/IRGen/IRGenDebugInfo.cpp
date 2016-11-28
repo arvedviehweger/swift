@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1479,6 +1479,7 @@ llvm::DIType *IRGenDebugInfo::createType(DebugTypeInfo DbgTy,
 
       // Use "__ObjC" as default for implicit decls.
       // FIXME: Do something more clever based on the decl's mangled name.
+      std::string FullModuleNameBuffer;
       StringRef ModulePath;
       StringRef ModuleName = "__ObjC";
       if (auto *OwningModule = ClangDecl->getImportedOwningModule())
@@ -1488,7 +1489,8 @@ llvm::DIType *IRGenDebugInfo::createType(DebugTypeInfo DbgTy,
         if (auto *ClangModule = SwiftModule->findUnderlyingClangModule()) {
           // FIXME: Clang submodules are not handled here.
           // FIXME: Clang module config macros are not handled here.
-          ModuleName = ClangModule->getFullModuleName();
+          FullModuleNameBuffer = ClangModule->getFullModuleName();
+          ModuleName = FullModuleNameBuffer;
           // FIXME: A clang module's Directory is supposed to be the
           // directory containing the module map, but ClangImporter
           // sets it to the module cache directory.

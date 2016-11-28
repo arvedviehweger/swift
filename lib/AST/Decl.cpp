@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/AST/Decl.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/ArchetypeBuilder.h"
 #include "swift/AST/AST.h"
 #include "swift/AST/ASTContext.h"
@@ -1873,18 +1874,13 @@ Accessibility ValueDecl::getFormalAccessImpl(const DeclContext *useDC) const {
   return getFormalAccess();
 }
 
-const DeclContext *
-ValueDecl::getFormalAccessScope(const DeclContext *useDC) const {
+AccessScope ValueDecl::getFormalAccessScope(const DeclContext *useDC) const {
   const DeclContext *result = getDeclContext();
   Accessibility access = getFormalAccess(useDC);
 
   while (!result->isModuleScopeContext()) {
-    if (result->isLocalContext())
-      return result;
-
-    if (access == Accessibility::Private) {
-      return result;
-    }
+    if (result->isLocalContext() || access == Accessibility::Private)
+      return AccessScope(result, true);
 
     if (auto enclosingNominal = dyn_cast<NominalTypeDecl>(result)) {
       access = std::min(access, enclosingNominal->getFormalAccess(useDC));
@@ -1909,15 +1905,15 @@ ValueDecl::getFormalAccessScope(const DeclContext *useDC) const {
   case Accessibility::Private:
   case Accessibility::FilePrivate:
     assert(result->isModuleScopeContext());
-    return result;
+    return AccessScope(result, access == Accessibility::Private);
   case Accessibility::Internal:
-    return result->getParentModule();
+    return AccessScope(result->getParentModule());
   case Accessibility::Public:
   case Accessibility::Open:
-    return nullptr;
+    return AccessScope::getPublic();
   }
 
-  return result;
+  llvm_unreachable("unknown accessibility level");
 }
 
 
@@ -2973,6 +2969,10 @@ Witness ProtocolDecl::getDefaultWitness(ValueDecl *requirement) const {
 /// Record the default witness for a requirement.
 void ProtocolDecl::setDefaultWitness(ValueDecl *requirement, Witness witness) {
   assert(witness);
+  // The first type we insert a default witness, register a destructor for
+  // this type.
+  if (DefaultWitnesses.empty())
+    getASTContext().addDestructorCleanup(DefaultWitnesses);
   auto pair = DefaultWitnesses.insert(std::make_pair(requirement, witness));
   assert(pair.second && "Already have a default witness!");
   (void) pair;
@@ -4481,6 +4481,23 @@ Type FuncDecl::getResultType() const {
   return resultTy;
 }
 
+Type FuncDecl::getResultInterfaceType() const {
+  if (!hasType())
+    return nullptr;
+
+  Type resultTy = getInterfaceType();
+  if (resultTy->hasError())
+    return resultTy;
+
+  for (unsigned i = 0, e = getNumParameterLists(); i != e; ++i)
+    resultTy = resultTy->castTo<AnyFunctionType>()->getResult();
+
+  if (!resultTy)
+    resultTy = TupleType::getEmpty(getASTContext());
+
+  return resultTy;
+}
+
 bool FuncDecl::isUnaryOperator() const {
   if (!isOperator())
     return false;
@@ -4589,7 +4606,9 @@ DynamicSelfType *FuncDecl::getDynamicSelfInterface() const {
 
 SourceRange FuncDecl::getSourceRange() const {
   SourceLoc StartLoc = getStartLoc();
-  if (StartLoc.isInvalid()) return SourceRange();
+  if (StartLoc.isInvalid() ||
+      getBodyKind() == BodyKind::Synthesize)
+    return SourceRange();
 
   if (getBodyKind() == BodyKind::Unparsed ||
       getBodyKind() == BodyKind::Skipped)
@@ -4697,6 +4716,13 @@ Type ConstructorDecl::getArgumentType() const {
 
 Type ConstructorDecl::getResultType() const {
   Type ArgTy = getType();
+  ArgTy = ArgTy->castTo<AnyFunctionType>()->getResult();
+  ArgTy = ArgTy->castTo<AnyFunctionType>()->getResult();
+  return ArgTy;
+}
+
+Type ConstructorDecl::getResultInterfaceType() const {
+  Type ArgTy = getInterfaceType();
   ArgTy = ArgTy->castTo<AnyFunctionType>()->getResult();
   ArgTy = ArgTy->castTo<AnyFunctionType>()->getResult();
   return ArgTy;

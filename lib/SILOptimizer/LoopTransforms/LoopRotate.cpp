@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -169,7 +169,7 @@ rewriteNewLoopEntryCheckBlock(SILBasicBlock *Header,
   SILSSAUpdater Updater(&InsertedPHIs);
 
   // Fix PHIs (incoming arguments).
-  for (auto *Inst: Header->getBBArgs())
+  for (auto *Inst : Header->getArguments())
     updateSSAForUseOfInst(Updater, InsertedPHIs, ValueMap, Header,
                           EntryCheckBlock, Inst);
 
@@ -331,7 +331,7 @@ bool swift::rotateLoop(SILLoop *L, DominanceInfo *DT, SILLoopInfo *LI,
 
   // The original 'phi' argument values are just the values coming from the
   // preheader edge.
-  ArrayRef<SILArgument *> PHIs = Header->getBBArgs();
+  ArrayRef<SILArgument *> PHIs = Header->getArguments();
   OperandValueArrayRef PreheaderArgs =
       cast<BranchInst>(Preheader->getTerminator())->getArgs();
   assert(PHIs.size() == PreheaderArgs.size() &&

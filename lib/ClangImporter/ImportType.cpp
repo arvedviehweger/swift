@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1319,6 +1319,19 @@ static Type adjustTypeForConcreteImport(ClangImporter::Implementation &impl,
     importedType = getUnmanagedType(impl, importedType);
   }
 
+  // Treat va_list specially: null-unspecified va_list parameters should be
+  // assumed to be non-optional. (Most people don't even think of va_list as a
+  // pointer, and it's not a portable assumption anyway.)
+  if (importKind == ImportTypeKind::Parameter &&
+      optKind == OTK_ImplicitlyUnwrappedOptional) {
+    if (auto *nominal = importedType->getNominalOrBoundGenericNominal()) {
+      if (nominal->getName().str() == "CVaListPointer" &&
+          nominal->getParentModule()->isStdlibModule()) {
+        optKind = OTK_None;
+      }
+    }
+  }
+
   // Wrap class, class protocol, function, and metatype types in an
   // optional type.
   if (importKind != ImportTypeKind::Typedef && canImportAsOptional(hint)) {
@@ -1421,9 +1434,9 @@ Type ClangImporter::Implementation::importPropertyType(
       clang::ObjCPropertyDecl::OBJC_PR_unsafe_unretained;
 
   ImportTypeKind importKind;
-  // HACK: Accessibility decls are always imported using bridged types,
-  // because they're inconsistent between properties and methods.
-  if (isAccessibilityDecl(decl)) {
+  // HACK: Certain decls are always imported using bridged types,
+  // because that's what a standalone method would do.
+  if (shouldImportPropertyAsAccessors(decl)) {
     importKind = ImportTypeKind::Property;
   } else {
     switch (decl->getSetterKind()) {
@@ -1550,7 +1563,8 @@ ParameterList *ClangImporter::Implementation::importFunctionParameterList(
 
     // Check nullability of the parameter.
     OptionalTypeKind OptionalityOfParam =
-        getParamOptionality(param, !nonNullArgs.empty() && nonNullArgs[index]);
+        getParamOptionality(SwiftContext.LangOpts.EffectiveLanguageVersion,
+                            param, !nonNullArgs.empty() && nonNullArgs[index]);
 
     ImportTypeKind importKind = ImportTypeKind::Parameter;
     if (param->hasAttr<clang::CFReturnsRetainedAttr>())
@@ -1933,8 +1947,9 @@ Type ClangImporter::Implementation::importMethodType(
 
     // Check nullability of the parameter.
     OptionalTypeKind optionalityOfParam
-      = getParamOptionality(param,
-                            !nonNullArgs.empty() && nonNullArgs[paramIndex]);
+        = getParamOptionality(SwiftContext.LangOpts.EffectiveLanguageVersion,
+                              param,
+                              !nonNullArgs.empty() && nonNullArgs[paramIndex]);
 
     bool allowNSUIntegerAsIntInParam = isFromSystemModule;
     if (allowNSUIntegerAsIntInParam) {

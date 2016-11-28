@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -792,10 +792,7 @@ namespace {
       // Fold sequence expressions.
       if (auto seqExpr = dyn_cast<SequenceExpr>(expr)) {
         auto result = TC.foldSequence(seqExpr, DC);
-        if (auto typeResult = simplifyTypeExpr(result)) {
-          return typeResult;
-        }
-        return result;
+        return result->walk(*this);
       }
 
       // Type check the type parameters in an UnresolvedSpecializeExpr.
@@ -1057,8 +1054,7 @@ TypeExpr *PreCheckExpression::simplifyTypeExpr(Expr *E) {
            "the TypeExpr should have been built correctly in the first place");
     
     auto *NewTypeRepr = TupleTypeRepr::create(TC.Context, InnerTypeRepr,
-                                              PE->getSourceRange(),
-                                              SourceLoc(), 1);
+                                              PE->getSourceRange());
     return new (TC.Context) TypeExpr(TypeLoc(NewTypeRepr, Type()));
   }
   
@@ -1070,6 +1066,8 @@ TypeExpr *PreCheckExpression::simplifyTypeExpr(Expr *E) {
       return nullptr;
 
     SmallVector<TypeRepr *, 4> Elts;
+    SmallVector<Identifier, 4> EltNames;
+    SmallVector<SourceLoc, 4> EltNameLocs;
     unsigned EltNo = 0;
     for (auto Elt : TE->getElements()) {
       auto *eltTE = dyn_cast<TypeExpr>(Elt);
@@ -1081,15 +1079,21 @@ TypeExpr *PreCheckExpression::simplifyTypeExpr(Expr *E) {
       // If the tuple element has a label, propagate it.
       auto *eltTR = eltTE->getTypeRepr();
       Identifier name = TE->getElementName(EltNo);
-      if (!name.empty())
-        eltTR = new (TC.Context) NamedTypeRepr(name, eltTR,
-                                               TE->getElementNameLoc(EltNo));
+      if (!name.empty()) {
+        if (EltNames.empty()) {
+          EltNames.resize(TE->getNumElements());
+          EltNameLocs.resize(TE->getNumElements());
+        }
+        EltNames[EltNo] = name;
+        EltNameLocs[EltNo] = TE->getElementNameLoc(EltNo);
+      }
 
       Elts.push_back(eltTR);
      ++EltNo;
     }
     auto *NewTypeRepr = TupleTypeRepr::create(TC.Context, Elts,
                                               TE->getSourceRange(),
+                                              EltNames, EltNameLocs, {},
                                               SourceLoc(), Elts.size());
     return new (TC.Context) TypeExpr(TypeLoc(NewTypeRepr, Type()));
   }
@@ -1158,48 +1162,38 @@ TypeExpr *PreCheckExpression::simplifyTypeExpr(Expr *E) {
   // FIXME: support 'inout', etc.
   if (auto *AE = dyn_cast<ArrowExpr>(E)) {
     if (!AE->isFolded()) return nullptr;
-    bool HadError = false;
 
-    TypeRepr *ArgsTypeRepr = nullptr;
-    if (auto TyE = dyn_cast<TypeExpr>(AE->getArgsExpr())) {
-      ArgsTypeRepr = TyE->getTypeRepr();
-    } else if (auto TE = dyn_cast<TupleExpr>(AE->getArgsExpr())) {
-      if (TE->getNumElements() == 0) {
-        ArgsTypeRepr = new (TC.Context) TupleTypeRepr({}, TE->getSourceRange(),
-            /*EllipsisLoc*/ SourceLoc(), /*EllipsisIdx*/ 0);
-      }
-    }
+    auto extractTypeRepr = [&](Expr *E) -> TypeRepr * {
+      if (!E)
+        return nullptr;
+      if (auto *TyE = dyn_cast<TypeExpr>(E))
+        return TyE->getTypeRepr();
+      if (auto *TE = dyn_cast<TupleExpr>(E))
+        if (TE->getNumElements() == 0)
+          return TupleTypeRepr::createEmpty(TC.Context, TE->getSourceRange());
+
+      // When simplifying a type expr like "P1 & P2 -> P3 & P4 -> Int",
+      // it may have been folded at the same time; recursively simplify it.
+      if (auto ArgsTypeExpr = simplifyTypeExpr(E))
+        return ArgsTypeExpr->getTypeRepr();
+      return nullptr;
+    };
+
+    TypeRepr *ArgsTypeRepr = extractTypeRepr(AE->getArgsExpr());
     if (!ArgsTypeRepr) {
       TC.diagnose(AE->getArgsExpr()->getLoc(),
                   diag::expected_type_before_arrow);
-      HadError = true;
+      ArgsTypeRepr =
+        new (TC.Context) ErrorTypeRepr(AE->getArgsExpr()->getSourceRange());
     }
 
-    TypeRepr *ResultTypeRepr = nullptr;
-    if (auto TyE = dyn_cast<TypeExpr>(AE->getResultExpr())) {
-      ResultTypeRepr = TyE->getTypeRepr();
-    } else if (auto TE = dyn_cast<TupleExpr>(AE->getResultExpr())) {
-      if (TE->getNumElements() == 0) {
-        ResultTypeRepr = new (TC.Context) TupleTypeRepr({},
-            TE->getSourceRange(), /*EllipsisLoc*/ SourceLoc(),
-            /*EllipsisIdx*/ 0);
-      }
-    } else if (isa<ArrowExpr>(AE->getResultExpr())) {
-      // When simplifying a type expr like "Int -> Int -> Int" the RHS may have
-      // been folded at the same time; recursively simplify it first if
-      // necessary.
-      auto ResultTypeExpr = simplifyTypeExpr(AE->getResultExpr());
-      if (ResultTypeExpr) {
-        ResultTypeRepr = ResultTypeExpr->getTypeRepr();
-      }
-    }
+    TypeRepr *ResultTypeRepr = extractTypeRepr(AE->getResultExpr());
     if (!ResultTypeRepr) {
       TC.diagnose(AE->getResultExpr()->getLoc(),
                   diag::expected_type_after_arrow);
-      HadError = true;
+      ResultTypeRepr =
+        new (TC.Context) ErrorTypeRepr(AE->getResultExpr()->getSourceRange());
     }
-
-    if (HadError) return nullptr;
 
     auto NewTypeRepr =
       new (TC.Context) FunctionTypeRepr(nullptr, ArgsTypeRepr,
@@ -2017,52 +2011,57 @@ bool TypeChecker::typeCheckForEachBinding(DeclContext *dc, ForEachStmt *stmt) {
 
       auto sequenceType = expr->getType()->getRValueType();
 
+      // Look through one level of optional; this improves recovery but doesn't
+      // change the result.
+      if (auto sequenceObjectType = sequenceType->getAnyOptionalObjectType())
+        sequenceType = sequenceObjectType;
+
       // If the sequence type is an existential, we should not attempt to
       // look up the member type at all, since we cannot represent associated
       // types of existentials.
       //
       // We will diagnose it later.
       if (!sequenceType->isExistentialType()) {
-        auto member = cs.TC.lookupMemberType(cs.DC,
-                                             sequenceType,
-                                             tc.Context.Id_Iterator,
-                                             lookupOptions);
-      
-        if (member) {
-          iteratorType = member.front().second;
+        ASTContext &ctx = tc.Context;
+        auto iteratorAssocType =
+          cast<AssociatedTypeDecl>(
+            sequenceProto->lookupDirect(ctx.Id_Iterator).front());
 
-          member = cs.TC.lookupMemberType(cs.DC,
-                                          iteratorType,
-                                          tc.Context.Id_Element,
-                                          lookupOptions);
+        iteratorType = sequenceType->getTypeOfMember(
+                         cs.DC->getParentModule(),
+                         iteratorAssocType,
+                         &tc,
+                         iteratorAssocType->getDeclaredInterfaceType());
 
-          if (member)
-            elementType = member.front().second;
+        if (iteratorType) {
+          auto iteratorProto =
+            tc.getProtocol(Stmt->getForLoc(),
+                           KnownProtocolKind::IteratorProtocol);
+          if (!iteratorProto)
+            return true;
+
+          auto elementAssocType =
+            cast<AssociatedTypeDecl>(
+              iteratorProto->lookupDirect(ctx.Id_Element).front());
+
+          elementType = iteratorType->getTypeOfMember(
+                          cs.DC->getParentModule(),
+                          elementAssocType,
+                          &tc,
+                          elementAssocType->getDeclaredInterfaceType());
         }
       }
 
-      // If the type lookup failed, just add some constraints we can
-      // try to solve later.
       if (elementType.isNull()) {
-      
-        // Determine the iterator type of the sequence.
-        iteratorType = cs.createTypeVariable(Locator, /*options=*/0);
-        cs.addTypeMemberConstraint(SequenceType, tc.Context.Id_Iterator,
-                                   iteratorType, iteratorLocator);
-
-        // Determine the element type of the iterator.
-        // FIXME: Should look up the type witness.
-        elementType = cs.createTypeVariable(Locator, /*options=*/0);
-        cs.addTypeMemberConstraint(iteratorType, tc.Context.Id_Element,
-                                   elementType, elementLocator);
+        elementType = cs.createTypeVariable(elementLocator,
+                                            TVO_MustBeMaterializable);
       }
-      
 
       // Add a conversion constraint between the element type of the sequence
       // and the type of the element pattern.
       cs.addConstraint(ConstraintKind::Conversion, elementType, InitType,
                        elementLocator);
-      
+
       Stmt->setSequence(expr);
       return false;
     }

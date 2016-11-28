@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -770,6 +770,10 @@ public:
   /// Emit a reflection metadata record for an imported type referenced
   /// from this module.
   void emitOpaqueTypeMetadataRecord(const NominalTypeDecl *nominalDecl);
+
+  /// Some nominal type declarations require us to emit a fixed-size type
+  /// descriptor, because they have special layout considerations.
+  bool shouldEmitOpaqueTypeMetadataRecord(const NominalTypeDecl *nominalDecl);
 
   /// Emit reflection metadata records for builtin and imported types referenced
   /// from this module.

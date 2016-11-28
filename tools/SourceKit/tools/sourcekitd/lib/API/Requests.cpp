@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -81,6 +81,7 @@ static LazySKDUID RequestCodeCompleteSetPopularAPI(
 static LazySKDUID
     RequestCodeCompleteSetCustom("source.request.codecomplete.setcustom");
 static LazySKDUID RequestCursorInfo("source.request.cursorinfo");
+static LazySKDUID RequestRangeInfo("source.request.rangeinfo");
 static LazySKDUID RequestRelatedIdents("source.request.relatedidents");
 static LazySKDUID RequestEditorOpen("source.request.editor.open");
 static LazySKDUID RequestEditorOpenInterface(
@@ -166,6 +167,8 @@ static sourcekitd_response_t reportDocInfo(llvm::MemoryBuffer *InputBuf,
                                            ArrayRef<const char *> Args);
 
 static void reportCursorInfo(const CursorInfo &Info, ResponseReceiver Rec);
+
+static void reportRangeInfo(const RangeInfo &Info, ResponseReceiver Rec);
 
 static void findRelatedIdents(StringRef Filename,
                               int64_t Offset,
@@ -735,6 +738,21 @@ handleSemanticRequest(RequestDict Req,
 
     return Rec(createErrorRequestInvalid(
         "either 'key.offset' or 'key.usr' is required"));
+  }
+
+  if (ReqUID == RequestRangeInfo) {
+    LangSupport &Lang = getGlobalContext().getSwiftLangSupport();
+    int64_t Offset;
+    int64_t Length;
+    if (!Req.getInt64(KeyOffset, Offset, /*isOptional=*/false)) {
+      if (!Req.getInt64(KeyLength, Length, /*isOptional=*/false)) {
+        return Lang.getRangeInfo(*SourceFile, Offset, Length, Args,
+          [Rec](const RangeInfo &Info) { reportRangeInfo(Info, Rec); });
+      }
+    }
+
+    return Rec(createErrorRequestInvalid(
+      "'key.offset' or 'key.length' is required"));
   }
 
   if (ReqUID == RequestRelatedIdents) {
@@ -1348,6 +1366,21 @@ static void reportCursorInfo(const CursorInfo &Info, ResponseReceiver Rec) {
     Elem.set(KeyContainerTypeUsr, Info.ContainerTypeUSR);
 
   return Rec(RespBuilder.createResponse());
+}
+
+//===----------------------------------------------------------------------===//
+// ReportRangeInfo
+//===----------------------------------------------------------------------===//
+
+static void reportRangeInfo(const RangeInfo &Info, ResponseReceiver Rec) {
+  if (Info.IsCancelled)
+    return Rec(createErrorRequestCancelled());
+  ResponseBuilder RespBuilder;
+  auto Elem = RespBuilder.getDictionary();
+  Elem.set(KeyKind, Info.RangeKind);
+  Elem.set(KeyTypeName, Info.ExprType);
+  Elem.set(KeyRangeContent, Info.RangeContent);
+  Rec(RespBuilder.createResponse());
 }
 
 //===----------------------------------------------------------------------===//

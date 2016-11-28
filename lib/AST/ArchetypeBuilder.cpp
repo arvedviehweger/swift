@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -61,8 +61,8 @@ void RequirementSource::dump(llvm::raw_ostream &out,
     out << "inferred";
     break;
 
-  case OuterScope:
-    out << "outer";
+  case Inherited:
+    out << "inherited";
     break;
   }
 
@@ -127,6 +127,9 @@ struct ArchetypeBuilder::Implementation {
   /// Once all requirements have been added, this will be zero in well-formed
   /// code.
   unsigned NumUnresolvedNestedTypes = 0;
+
+  /// The nested types that have been renamed.
+  SmallVector<PotentialArchetype *, 4> RenamedNestedTypes;
 };
 
 ArchetypeBuilder::PotentialArchetype::~PotentialArchetype() {
@@ -232,7 +235,7 @@ static ProtocolConformance *getSuperConformance(
   // appropriately.
   updateRequirementSource(
     conformsSource,
-    RequirementSource(RequirementSource::Redundant,
+    RequirementSource(RequirementSource::Inherited,
                       pa->getSuperclassSource().getLoc()));
   return conformance->getConcrete();
 }
@@ -611,13 +614,12 @@ ArchetypeBuilder::PotentialArchetype::getType(ArchetypeBuilder &builder) {
     return representative->ArchetypeOrConcreteType;
   }
   
-  ArchetypeType::AssocTypeOrProtocolType assocTypeOrProto = RootProtocol;
+  AssociatedTypeDecl *assocType = nullptr;
+
   // Allocate a new archetype.
   ArchetypeType *ParentArchetype = nullptr;
   auto &mod = builder.getModule();
   if (auto parent = getParent()) {
-    assert(assocTypeOrProto.isNull() &&
-           "root protocol type given for non-root archetype");
     auto parentTy = parent->getType(builder);
     if (!parentTy)
       return NestedType::forConcreteType(
@@ -668,7 +670,7 @@ ArchetypeBuilder::PotentialArchetype::getType(ArchetypeBuilder &builder) {
       }
     }
 
-    assocTypeOrProto = getResolvedAssociatedType();
+    assocType = getResolvedAssociatedType();
   }
 
   // If we ended up building our parent archetype, then we'll have
@@ -678,7 +680,19 @@ ArchetypeBuilder::PotentialArchetype::getType(ArchetypeBuilder &builder) {
 
   SmallVector<ProtocolDecl *, 4> Protos;
   for (const auto &conforms : ConformsTo) {
-    Protos.push_back(conforms.first);
+    switch (conforms.second.getKind()) {
+    case RequirementSource::Explicit:
+    case RequirementSource::Inferred:
+    case RequirementSource::Protocol:
+    case RequirementSource::Redundant:
+      Protos.push_back(conforms.first);
+      break;
+
+    case RequirementSource::Inherited:
+      // Inherited conformances are recoverable from the superclass
+      // constraint.
+      break;
+    }
   }
 
   Type superclass;
@@ -699,7 +713,7 @@ ArchetypeBuilder::PotentialArchetype::getType(ArchetypeBuilder &builder) {
 
   auto arch
     = ArchetypeType::getNew(builder.getASTContext(), ParentArchetype,
-                            assocTypeOrProto, getName(), Protos,
+                            assocType, getName(), Protos,
                             superclass, isRecursive());
 
   representative->ArchetypeOrConcreteType = NestedType::forArchetype(arch);
@@ -853,7 +867,6 @@ auto ArchetypeBuilder::resolveArchetype(Type type) -> PotentialArchetype * {
 }
 
 auto ArchetypeBuilder::addGenericParameter(GenericTypeParamType *GenericParam,
-                                           ProtocolDecl *RootProtocol,
                                            Identifier ParamName)
        -> PotentialArchetype *
 {
@@ -861,21 +874,15 @@ auto ArchetypeBuilder::addGenericParameter(GenericTypeParamType *GenericParam,
   
   // Create a potential archetype for this type parameter.
   assert(!Impl->PotentialArchetypes[Key]);
-  auto PA = new PotentialArchetype(GenericParam, RootProtocol, ParamName);
+  auto PA = new PotentialArchetype(GenericParam, ParamName);
 
   Impl->PotentialArchetypes[Key] = PA;
   return PA;
 }
 
 void ArchetypeBuilder::addGenericParameter(GenericTypeParamDecl *GenericParam) {
-  ProtocolDecl *RootProtocol = dyn_cast<ProtocolDecl>(GenericParam->getDeclContext());
-  if (!RootProtocol) {
-    if (auto Ext = dyn_cast<ExtensionDecl>(GenericParam->getDeclContext()))
-      RootProtocol = dyn_cast_or_null<ProtocolDecl>(Ext->getExtendedType()->getAnyNominal());
-  }
   addGenericParameter(
         GenericParam->getDeclaredType()->castTo<GenericTypeParamType>(),
-        RootProtocol,
         GenericParam->getName());
 }
 
@@ -897,7 +904,7 @@ void ArchetypeBuilder::addGenericParameter(GenericTypeParamType *GenericParam) {
   if (name.str().startswith("$"))
     name = Context.getIdentifier(name.str().slice(1, name.str().size()));
   
-  addGenericParameter(GenericParam, nullptr, name);
+  addGenericParameter(GenericParam, name);
 }
 
 bool ArchetypeBuilder::addConformanceRequirement(PotentialArchetype *PAT,
@@ -960,6 +967,8 @@ bool ArchetypeBuilder::addConformanceRequirement(PotentialArchetype *PAT,
 bool ArchetypeBuilder::addSuperclassRequirement(PotentialArchetype *T,
                                                 Type Superclass,
                                                 RequirementSource Source) {
+  T = T->getRepresentative();
+
   if (Superclass->hasArchetype()) {
     // Map contextual type to interface type.
     // FIXME: There might be a better way to do this.
@@ -976,6 +985,21 @@ bool ArchetypeBuilder::addSuperclassRequirement(PotentialArchetype *T,
         });
   }
 
+  // Make sure the concrete type fulfills the superclass requirement
+  // of the archetype.
+  if (T->isConcreteType()) {
+    Type concrete = T->getConcreteType();
+    if (!Superclass->isExactSuperclassOf(concrete, getLazyResolver())) {
+      Diags.diagnose(T->getSameTypeSource().getLoc(),
+                     diag::type_does_not_inherit,
+                     T->getRootParam(), concrete, Superclass)
+        .highlight(Source.getLoc());
+      return true;
+    }
+
+    return false;
+  }
+
   // Local function to handle the update of superclass conformances
   // when the superclass constraint changes.
   auto updateSuperclassConformances = [&] {
@@ -990,7 +1014,7 @@ bool ArchetypeBuilder::addSuperclassRequirement(PotentialArchetype *T,
           auto nested = nestedTypes.find(assocType->getName());
           if (nested == nestedTypes.end()) continue;
 
-          RequirementSource redundantSource(RequirementSource::Redundant,
+          RequirementSource redundantSource(RequirementSource::Inherited,
                                             Source.getLoc());
 
           for (auto nestedPA : nested->second) {
@@ -1116,8 +1140,40 @@ static int compareDependentTypes(ArchetypeBuilder::PotentialArchetype * const* p
     return -1;
   }
 
+  // A resolved archetype is always ordered before an unresolved one.
   if (b->getResolvedAssociatedType())
     return +1;
+
+  // Make sure typealiases are properly ordered, to avoid crashers.
+  // FIXME: Ideally we would eliminate typealiases earlier.
+  if (auto *aa = a->getTypeAliasDecl()) {
+    if (auto *ab = b->getTypeAliasDecl()) {
+      // - by protocol, so t_n_m.`P.T` < t_n_m.`Q.T` (given P < Q)
+      auto protoa = aa->getDeclContext()->getAsProtocolOrProtocolExtensionContext();
+      auto protob = ab->getDeclContext()->getAsProtocolOrProtocolExtensionContext();
+      if (int compareProtocols
+            = ProtocolType::compareProtocols(&protoa, &protob))
+        return compareProtocols;
+    }
+
+    // A resolved archetype is always ordered before an unresolved one.
+    return -1;
+  }
+
+  // A resolved archetype is always ordered before an unresolved one.
+  if (b->getTypeAliasDecl())
+    return +1;
+
+  // Along the error path where one or both of the potential archetypes was
+  // renamed due to typo correction,
+  if (a->wasRenamed() || b->wasRenamed()) {
+    if (a->wasRenamed() != b->wasRenamed())
+      return a->wasRenamed() ? +1 : -1;
+
+    if (int compareNames = a->getOriginalName().str().compare(
+                                                    b->getOriginalName().str()))
+      return compareNames;
+  }
 
   llvm_unreachable("potential archetype total order failure");
 }
@@ -1197,7 +1253,11 @@ bool ArchetypeBuilder::addSameTypeRequirementBetweenArchetypes(
   for (auto equiv : T2->EquivalenceClass)
     T1->EquivalenceClass.push_back(equiv);
 
-  // FIXME: superclass requirements!
+  // Superclass requirements.
+  if (T2->Superclass) {
+    addSuperclassRequirement(T1, T2->getSuperclass(),
+                             T2->getSuperclassSource());
+  }
 
   // Add all of the protocol conformance requirements of T2 to T1.
   for (auto conforms : T2->ConformsTo) {
@@ -1240,7 +1300,7 @@ bool ArchetypeBuilder::addSameTypeRequirementToConcrete(
   }
   
   // Make sure the concrete type fulfills the requirements on the archetype.
-  DenseMap<ProtocolDecl *, ProtocolConformance*> conformances;
+  DenseMap<ProtocolDecl *, ProtocolConformanceRef> conformances;
   if (!Concrete->is<ArchetypeType>()) {
     for (auto conforms : T->getConformsTo()) {
       auto protocol = conforms.first;
@@ -1253,14 +1313,24 @@ bool ArchetypeBuilder::addSameTypeRequirementToConcrete(
         return true;
       }
 
-      assert(conformance->isConcrete() && "Abstract conformance?");
-      conformances[protocol] = conformance->getConcrete();
+      conformances.insert({protocol, *conformance});
     }
   }
   
   // Record the requirement.
   T->ArchetypeOrConcreteType = NestedType::forConcreteType(Concrete);
   T->SameTypeSource = Source;
+
+  // Make sure the concrete type fulfills the superclass requirement
+  // of the archetype.
+  if (T->Superclass) {
+    if (!T->Superclass->isExactSuperclassOf(Concrete, getLazyResolver())) {
+      Diags.diagnose(Source.getLoc(), diag::type_does_not_inherit,
+                     T->getRootParam(), Concrete, T->Superclass)
+        .highlight(T->SuperclassSource->getLoc());
+      return true;
+    }
+  }
 
   // Recursively resolve the associated types to their concrete types.
   for (auto nested : T->getNestedTypes()) {
@@ -1275,9 +1345,16 @@ bool ArchetypeBuilder::addSameTypeRequirementToConcrete(
     } else {
       assert(conformances.count(assocType->getProtocol()) > 0
              && "missing conformance?");
-      auto witness = conformances[assocType->getProtocol()]
-            ->getTypeWitness(assocType, getLazyResolver());
-      auto witnessType = witness.getReplacement();
+      auto conformance = conformances.find(assocType->getProtocol())->second;
+      Type witnessType;
+      if (conformance.isConcrete()) {
+        witnessType = conformance.getConcrete()
+                        ->getTypeWitness(assocType, getLazyResolver())
+                        .getReplacement();
+      } else {
+        witnessType = DependentMemberType::get(Concrete, assocType);
+      }
+
       if (auto witnessPA = resolveArchetype(witnessType)) {
         addSameTypeRequirementBetweenArchetypes(nested.second.front(),
                                                 witnessPA,
@@ -1517,9 +1594,6 @@ void ArchetypeBuilder::addRequirement(const Requirement &req,
   case RequirementKind::SameType:
     addSameTypeRequirement(req.getFirstType(), req.getSecondType(), source);
     return;
-    
-  case RequirementKind::WitnessMarker:
-    return;
   }
 
   llvm_unreachable("Unhandled requirement?");
@@ -1569,9 +1643,6 @@ public:
     RequirementSource source(RequirementSource::Inferred, Loc);
     for (const auto &req : genericSig->getRequirements()) {
       switch (req.getKind()) {
-      case RequirementKind::WitnessMarker:
-        break;
-
       case RequirementKind::SameType: {
         auto firstType = req.getFirstType().subst(
                            &Builder.getModule(),
@@ -1807,6 +1878,7 @@ ArchetypeBuilder::finalize(SourceLoc loc, bool allowConcreteGenericParams) {
 
       // Set the typo-corrected name.
       pa->setRenamed(correction);
+      Impl->RenamedNestedTypes.push_back(pa);
       
       // Resolve the associated type and merge the potential archetypes.
       auto replacement = pa->getParent()->getNestedType(correction, *this);
@@ -1815,6 +1887,20 @@ ArchetypeBuilder::finalize(SourceLoc loc, bool allowConcreteGenericParams) {
         RequirementSource(RequirementSource::Redundant, SourceLoc()));
     });
   }
+}
+
+bool ArchetypeBuilder::diagnoseRemainingRenames(SourceLoc loc) {
+  bool invalid = false;
+  for (auto pa : Impl->RenamedNestedTypes) {
+    if (pa->alreadyDiagnosedRename()) continue;
+
+    Diags.diagnose(loc, diag::invalid_member_type_suggest,
+                   pa->getParent()->getDependentType(*this, true),
+                   pa->getOriginalName(), pa->getName());
+    invalid = true;
+  }
+
+  return invalid;
 }
 
 template<typename F>
@@ -1891,10 +1977,6 @@ void ArchetypeBuilder::enumerateRequirements(llvm::function_ref<
       continue;
     }
 
-    // Add the witness marker.
-    f(RequirementKind::WitnessMarker, archetype, Type(),
-      RequirementSource(RequirementSource::Explicit, SourceLoc()));
-
     // If we have a superclass, produce a superclass requirement
     if (Type superclass = archetype->getSuperclass()) {
       f(RequirementKind::Superclass, archetype, superclass,
@@ -1957,10 +2039,6 @@ void ArchetypeBuilder::dump(llvm::raw_ostream &out) {
       source.dump(out, &Context.SourceMgr);
       out << "]";
       break;
-
-    case RequirementKind::WitnessMarker:
-      out << "\n  " << archetype->getDebugName() << " witness marker";
-      break;
     }
   });
   out << "\n";
@@ -2007,14 +2085,10 @@ ArchetypeBuilder::mapTypeOutOfContext(ModuleDecl *M,
 }
 
 void ArchetypeBuilder::addGenericSignature(GenericSignature *sig,
-                                           GenericEnvironment *env,
-                                           bool treatRequirementsAsExplicit) {
+                                           GenericEnvironment *env) {
   if (!sig) return;
   
-  RequirementSource::Kind sourceKind = treatRequirementsAsExplicit
-    ? RequirementSource::Explicit
-    : RequirementSource::OuterScope;
-  
+  RequirementSource::Kind sourceKind = RequirementSource::Explicit;
   for (auto param : sig->getGenericParams()) {
     addGenericParameter(param);
 
@@ -2054,12 +2128,12 @@ static void collectRequirements(ArchetypeBuilder &builder,
     switch (source.getKind()) {
     case RequirementSource::Explicit:
     case RequirementSource::Inferred:
-    case RequirementSource::OuterScope:
       // The requirement was explicit and required, keep it.
       break;
 
     case RequirementSource::Protocol:
     case RequirementSource::Redundant:
+    case RequirementSource::Inherited:
       // The requirement was redundant, drop it.
       return;
     }
@@ -2068,11 +2142,6 @@ static void collectRequirements(ArchetypeBuilder &builder,
 
     if (depTy->hasError())
       return;
-
-    if (kind == RequirementKind::WitnessMarker) {
-      requirements.push_back(Requirement(kind, depTy, Type()));
-      return;
-    }
 
     Type repTy;
     if (auto concreteTy = type.dyn_cast<Type>()) {
@@ -2106,13 +2175,11 @@ GenericSignature *ArchetypeBuilder::getGenericSignature() {
   return sig;
 }
 
-GenericEnvironment *ArchetypeBuilder::getGenericEnvironment() {
-  SmallVector<GenericTypeParamType *, 4> genericParamTypes;
+GenericEnvironment *ArchetypeBuilder::getGenericEnvironment(GenericSignature *signature) {
   TypeSubstitutionMap interfaceToArchetypeMap;
 
   for (auto pair : Impl->PotentialArchetypes) {
     auto paramTy = pair.second->getGenericParam();
-    genericParamTypes.push_back(paramTy);
 
     auto archetypeTy = pair.second->getType(*this).getAsArchetype();
     auto concreteTy = pair.second->getType(*this).getAsConcreteType();
@@ -2124,7 +2191,8 @@ GenericEnvironment *ArchetypeBuilder::getGenericEnvironment() {
       llvm_unreachable("broken generic parameter");
   }
 
-  return GenericEnvironment::get(Context, genericParamTypes,
+
+  return GenericEnvironment::get(Context, signature,
                                  interfaceToArchetypeMap);
 }
 

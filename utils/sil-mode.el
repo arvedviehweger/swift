@@ -5,8 +5,8 @@
 ;; Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 ;; Licensed under Apache License v2.0 with Runtime Library Exception
 ;;
-;; See http://swift.org/LICENSE.txt for license information
-;; See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+;; See https://swift.org/LICENSE.txt for license information
+;; See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 ;;
 ;;===----------------------------------------------------------------------===;;
 
@@ -119,7 +119,9 @@
    `(,(regexp-opt '("init_existential_addr" "deinit_existential_addr"
                     "open_existential_addr" "alloc_existential_box"
                     "init_existential_ref" "project_existential_box"
-                    "open_existential_ref" "open_existential_box")
+                    "open_existential_ref" "open_existential_box"
+                    "open_existential_metatype"
+                    "objc_protocol")
                   'words) . font-lock-keyword-face)
    ;; Unchecked Conversions
    `(,(regexp-opt '("upcast"

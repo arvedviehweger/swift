@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -317,8 +317,9 @@ public:
     // load+materialize in some cases, but it's not really important.
     SILValue selfValue = self.getValue();
     if (selfValue->getType().isAddress()) {
-      selfValue =
-          gen.B.createLoad(loc, selfValue, LoadOwnershipQualifier::Unqualified);
+      // SEMANTIC ARC TODO: We are returning self as a borrowed value. Is this
+      // correct?
+      selfValue = gen.B.createLoadBorrow(loc, selfValue);
     }
 
     // Do a derived-to-base conversion if necessary.
@@ -556,7 +557,7 @@ SILFunction *MaterializeForSetEmitter::createCallback(SILFunction &F,
     auto makeParam = [&](unsigned index) -> SILArgument* {
       SILType type = gen.F.mapTypeIntoContext(
           callbackType->getParameters()[index].getSILType());
-      return new (SGM.M) SILArgument(gen.F.begin(), type);
+      return gen.F.begin()->createArgument(type);
     };
 
     // Add arguments for all the parameters.
@@ -651,8 +652,8 @@ MaterializeForSetEmitter::createAddressorCallback(SILFunction &F,
                             SILValue self) {
     auto ownerAddress =
       gen.B.createProjectValueBuffer(loc, ownerType, callbackStorage);
-    auto owner = gen.B.createLoad(loc, ownerAddress,
-                                  LoadOwnershipQualifier::Unqualified);
+    auto owner = gen.B.emitLoadValueOperation(loc, ownerAddress,
+                                              LoadOwnershipQualifier::Take);
 
     switch (addressorKind) {
     case AddressorKind::NotAddressor:
@@ -764,8 +765,8 @@ MaterializeForSetEmitter::createSetterCallback(SILFunction &F,
       SILValue indicesV =
         gen.B.createProjectValueBuffer(loc, indicesTy, callbackBuffer);
       if (indicesTL->isLoadable())
-        indicesV = gen.B.createLoad(loc, indicesV,
-                                    LoadOwnershipQualifier::Unqualified);
+        indicesV = indicesTL->emitLoad(gen.B, loc, indicesV,
+                                       LoadOwnershipQualifier::Take);
       ManagedValue mIndices =
         gen.emitManagedRValueWithCleanup(indicesV, *indicesTL);
 
@@ -785,7 +786,7 @@ MaterializeForSetEmitter::createSetterCallback(SILFunction &F,
     value = gen.B.createPointerToAddress(
       loc, value, valueTL.getLoweredType().getAddressType(), /*isStrict*/ true);
     if (valueTL.isLoadable())
-      value = gen.B.createLoad(loc, value, LoadOwnershipQualifier::Unqualified);
+      value = valueTL.emitLoad(gen.B, loc, value, LoadOwnershipQualifier::Take);
     ManagedValue mValue = gen.emitManagedRValueWithCleanup(value, valueTL);
     RValue rvalue(gen, loc, lvalue.getSubstFormalType(), mValue);
 

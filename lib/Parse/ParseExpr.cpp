@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1387,7 +1387,9 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
   case tok::code_complete:
     Result = makeParserResult(new (Context) CodeCompletionExpr(Tok.getRange()));
     Result.setHasCodeCompletion();
-    if (CodeCompletion)
+    if (CodeCompletion &&
+        // We cannot code complete anything after var/let.
+        (!InVarOrLetPattern || InVarOrLetPattern == IVOLP_InMatchingPattern))
       CodeCompletion->completePostfixExprBeginning(dyn_cast<CodeCompletionExpr>(
         Result.get()));
     consumeToken(tok::code_complete);

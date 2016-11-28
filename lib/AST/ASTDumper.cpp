@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -2420,20 +2420,22 @@ public:
 
   void visitTupleTypeRepr(TupleTypeRepr *T) {
     printCommon(T, "type_tuple");
+
+    if (T->hasElementNames()) {
+      OS << " names=";
+      for (unsigned i = 0, end = T->getNumElements(); i != end; ++i) {
+        if (i) OS << ",";
+        auto name = T->getElementName(i);
+        if (T->isNamedParameter(i))
+          OS << (name.empty() ? "_" : "_ " + name.str());
+        else
+          OS << (name.empty() ? "''" : name.str());
+      }
+    }
+
     for (auto elem : T->getElements()) {
       OS << '\n';
       printRec(elem);
-    }
-    OS << ')';
-  }
-
-  void visitNamedTypeRepr(NamedTypeRepr *T) {
-    printCommon(T, "type_named");
-    if (T->hasName())
-      OS << " id=" << T->getName();
-    if (T->getTypeRepr()) {
-      OS << '\n';
-      printRec(T->getTypeRepr());
     }
     OS << ')';
   }
@@ -3090,9 +3092,9 @@ void TypeBase::dump(raw_ostream &os, unsigned indent) const {
 
 void GenericEnvironment::dump() const {
   llvm::errs() << "Generic environment:\n";
-  for (auto pair : getInterfaceToArchetypeMap()) {
-    pair.first->dump();
-    pair.second->dump();
+  for (auto gp : getGenericParams()) {
+    gp->dump();
+    mapTypeIntoContext(gp)->dump();
   }
   llvm::errs() << "Generic parameters:\n";
   for (auto paramTy : getGenericParams())

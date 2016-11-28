@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -209,6 +209,12 @@ static bool emitReferenceDependencies(DiagnosticEngine &diags,
                    diag::emit_reference_dependencies_without_primary_file);
     return true;
   }
+
+  // Before writing to the dependencies file path, preserve any previous file
+  // that may have been there. No error handling -- this is just a nicety, it
+  // doesn't matter if it fails.
+  llvm::sys::fs::rename(opts.ReferenceDependenciesFilePath,
+                        opts.ReferenceDependenciesFilePath + "~");
 
   std::error_code EC;
   llvm::raw_fd_ostream out(opts.ReferenceDependenciesFilePath, EC,

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -540,15 +540,24 @@ ParserResult<TypeRepr> Parser::parseOldStyleProtocolComposition() {
       }
     }
 
-    // Copy trailing content after '>' to the replacement string.
+    if (Protocols.size() > 1) {
+      // Need parenthesis if the next token looks like postfix TypeRepr.
+      // i.e. '?', '!', '.Type', '.Protocol'
+      bool needParen = false;
+      needParen |= !Tok.isAtStartOfLine() && 
+          (isOptionalToken(Tok) || isImplicitlyUnwrappedOptionalToken(Tok));
+      needParen |= Tok.isAny(tok::period, tok::period_prefix);
+      if (needParen) {
+        replacement.insert(replacement.begin(), '(');
+        replacement += ")";
+      }
+    }
+
+    // Copy split token after '>' to the replacement string.
     // FIXME: lexer should smartly separate '>' and trailing contents like '?'.
     StringRef TrailingContent = L->getTokenAt(RAngleLoc).getRange().str().
       substr(1);
     if (!TrailingContent.empty()) {
-      if (Protocols.size() > 1) {
-        replacement.insert(replacement.begin(), '(');
-        replacement += ")";
-      }
       replacement += TrailingContent;
     }
 
@@ -714,12 +723,21 @@ ParserResult<TupleTypeRepr> Parser::parseTypeTupleBody() {
   if (EllipsisLoc.isInvalid())
     EllipsisIdx = ElementsR.size();
 
+  SmallVector<Identifier, 4> ElementNames;
+  SmallVector<SourceLoc, 4> ElementNameLocs;
+  SmallVector<SourceLoc, 4> UnderscoreLocs;
   // If there were any labels, figure out which labels should go into the type
   // representation.
   if (!Labels.empty()) {
     assert(Labels.size() == ElementsR.size());
+
     bool isFunctionType = Tok.isAny(tok::arrow, tok::kw_throws,
                                     tok::kw_rethrows);
+    ElementNames.resize(ElementsR.size());
+    ElementNameLocs.resize(ElementsR.size());
+    if (isFunctionType)
+      UnderscoreLocs.resize(ElementsR.size());
+
     for (unsigned i : indices(ElementsR)) {
       auto &currentLabel = Labels[i];
 
@@ -743,8 +761,8 @@ ParserResult<TupleTypeRepr> Parser::parseTypeTupleBody() {
         }
 
         // Form the named type representation.
-        ElementsR[i] = new (Context) NamedTypeRepr(firstName, ElementsR[i],
-                                                   firstNameLoc);
+        ElementNames[i] = firstName;
+        ElementNameLocs[i] = firstNameLoc;
         continue;
       }
 
@@ -763,8 +781,9 @@ ParserResult<TupleTypeRepr> Parser::parseTypeTupleBody() {
 
       if (firstNameLoc.isValid() || secondNameLoc.isValid()) {
         // Form the named parameter type representation.
-        ElementsR[i] = new (Context) NamedTypeRepr(secondName, ElementsR[i],
-                                                   secondNameLoc, firstNameLoc);
+        ElementNames[i] = secondName;
+        ElementNameLocs[i] = secondNameLoc;
+        UnderscoreLocs[i]  = firstNameLoc;
       }
     }
   }
@@ -772,6 +791,8 @@ ParserResult<TupleTypeRepr> Parser::parseTypeTupleBody() {
   return makeParserResult(Status,
                           TupleTypeRepr::create(Context, ElementsR,
                                                 SourceRange(LPLoc, RPLoc),
+                                                ElementNames, ElementNameLocs,
+                                                UnderscoreLocs,
                                                 EllipsisLoc, EllipsisIdx));
 }
 

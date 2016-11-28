@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -650,7 +650,7 @@ public:
     if (isa<AutoClosureExpr>(E)) {
       // Autoclosures look strange if there isn't a region, since it looks like
       // control flow starts partway through an expression. For now we skip
-      // these so we don't get odd behaviour in default arguments and the like,
+      // these so we don't get odd behavior in default arguments and the like,
       // but in the future we should consider creating appropriate regions for
       // those expressions.
       if (!RegionStack.empty())

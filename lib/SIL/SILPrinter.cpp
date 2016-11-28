@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -472,8 +472,8 @@ public:
 
   void print(const SILBasicBlock *BB) {
     // Output uses for BB arguments.
-    if (!BB->bbarg_empty()) {
-      for (auto I = BB->bbarg_begin(), E = BB->bbarg_end(); I != E; ++I) {
+    if (!BB->args_empty()) {
+      for (auto I = BB->args_begin(), E = BB->args_end(); I != E; ++I) {
         SILValue V = *I;
         if (V->use_empty())
           continue;
@@ -505,10 +505,11 @@ public:
 
     *this << getID(BB);
 
-    if (!BB->bbarg_empty()) {
+    if (!BB->args_empty()) {
       *this << '(';
-      for (auto I = BB->bbarg_begin(), E = BB->bbarg_end(); I != E; ++I) {
-        if (I != BB->bbarg_begin()) *this << ", ";
+      for (auto I = BB->args_begin(), E = BB->args_end(); I != E; ++I) {
+        if (I != BB->args_begin())
+          *this << ", ";
         *this << getIDAndType(*I);
       }
       *this << ')';
@@ -883,7 +884,7 @@ public:
   }
 
   void visitAllocBoxInst(AllocBoxInst *ABI) {
-    *this << ABI->getElementType();
+    *this << ABI->getType();
     printDebugVar(ABI->getVarInfo());
   }
 
@@ -1683,7 +1684,7 @@ ID SILPrinter::getID(SILValue V) {
 
   // Lazily initialize the instruction -> ID mapping.
   if (ValueToIDMap.empty()) {
-    V->getParentBB()->getParent()->numberValues(ValueToIDMap);
+    V->getParentBlock()->getParent()->numberValues(ValueToIDMap);
   }
 
   ID R = { ID::SSAValue, ValueToIDMap[V] };
@@ -1869,9 +1870,9 @@ void SILFunction::print(SILPrintContext &PrintCtx) const {
 
     SILPrinter(PrintCtx, (Aliases.empty() ? nullptr : &Aliases))
         .print(this);
-    OS << "}";
+    OS << "} // end sil function '" << getName() << '\'';
   }
-  
+
   OS << "\n\n";
 }
       
