@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -46,7 +46,7 @@ _getErrorAllocatedSizeAndAlignmentMask(const Metadata *type) {
 }
 
 /// Destructor for an Error box.
-static void _destroyErrorObject(HeapObject *obj) {
+static SWIFT_CC(swift) void _destroyErrorObject(SWIFT_CONTEXT HeapObject *obj) {
   auto error = static_cast<SwiftError *>(obj);
   
   // Destroy the value inside.
@@ -60,12 +60,11 @@ static void _destroyErrorObject(HeapObject *obj) {
 
 /// Heap metadata for Error boxes.
 static const FullMetadata<HeapMetadata> ErrorMetadata{
-  HeapMetadataHeader{{_destroyErrorObject}, {&_TWVBo}},
+  HeapMetadataHeader{{_destroyErrorObject}, {&VALUE_WITNESS_SYM(Bo)}},
   Metadata{MetadataKind::ErrorObject},
 };
 
 SWIFT_CC(swift) SWIFT_RUNTIME_EXPORT
-extern "C"
 BoxPair::Return
 swift::swift_allocError(const swift::Metadata *type,
                         const swift::WitnessTable *errorConformance,

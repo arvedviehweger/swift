@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,10 +14,10 @@
 // relationships among the type variables within a constraint system.
 //
 //===----------------------------------------------------------------------===//
+
 #include "ConstraintGraph.h"
 #include "ConstraintGraphScope.h"
 #include "ConstraintSystem.h"
-#include "swift/Basic/Fallthrough.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <algorithm>
@@ -36,7 +36,7 @@ ConstraintGraph::~ConstraintGraph() {
   for (unsigned i = 0, n = TypeVariables.size(); i != n; ++i) {
     auto &impl = TypeVariables[i]->getImpl();
     delete impl.getGraphNode();
-    impl.setGraphNode(0);
+    impl.setGraphNode(nullptr);
   }
 }
 
@@ -319,7 +319,7 @@ void ConstraintGraph::removeNode(TypeVariableType *typeVar) {
   auto &impl = typeVar->getImpl();
   unsigned index = impl.getGraphIndex();
   delete impl.getGraphNode();
-  impl.setGraphNode(0);
+  impl.setGraphNode(nullptr);
 
   // Remove this type variable from the list.
   unsigned lastIndex = TypeVariables.size()-1;
@@ -349,6 +349,12 @@ void ConstraintGraph::addConstraint(Constraint *constraint) {
     }
   }
 
+  // If the constraint doesn't reference any type variables, it's orphaned;
+  // track it as such.
+  if (referencedTypeVars.empty()) {
+    OrphanedConstraints.push_back(constraint);
+  }
+
   // Record the change, if there are active scopes.
   if (ActiveScope)
     Changes.push_back(Change::addedConstraint(constraint));
@@ -373,6 +379,16 @@ void ConstraintGraph::removeConstraint(Constraint *constraint) {
 
       node.removeAdjacency(otherTypeVar);
     }
+  }
+
+  // If this is an orphaned constraint, remove it from the list.
+  if (referencedTypeVars.empty()) {
+    auto known = std::find(OrphanedConstraints.begin(),
+                           OrphanedConstraints.end(),
+                           constraint);
+    assert(known != OrphanedConstraints.end() && "missing orphaned constraint");
+    *known = OrphanedConstraints.back();
+    OrphanedConstraints.pop_back();
   }
 
   // Record the change, if there are active scopes.
@@ -449,7 +465,8 @@ void ConstraintGraph::unbindTypeVariable(TypeVariableType *typeVar, Type fixed){
 
 void ConstraintGraph::gatherConstraints(
        TypeVariableType *typeVar,
-       SmallVectorImpl<Constraint *> &constraints) {
+       SmallVectorImpl<Constraint *> &constraints,
+       GatheringKind kind) {
   auto &node = (*this)[CS.getRepresentative(typeVar)];
   auto equivClass = node.getEquivalenceClass();
   llvm::SmallPtrSet<TypeVariableType *, 4> typeVars;
@@ -461,16 +478,37 @@ void ConstraintGraph::gatherConstraints(
       constraints.push_back(constraint);
   }
 
-  // Retrieve the constraints from fixed bindings.
-  for (auto typeVar : node.getAdjacencies()) {
-    if (!node.getAdjacency(typeVar).FixedBinding)
-      continue;
+  // Retrieve the constraints from adjacent bindings.
+  for (auto adjTypeVar : node.getAdjacencies()) {
+    switch (kind) {
+    case GatheringKind::EquivalenceClass:
+      if (!node.getAdjacency(adjTypeVar).FixedBinding)
+        continue;
+      break;
 
-    if (!typeVars.insert(typeVar).second)
-      continue;
+    case GatheringKind::AllMentions:
+      break;
+    }
 
-    for (auto constraint : (*this)[typeVar].getConstraints())
-      constraints.push_back(constraint);
+    ArrayRef<TypeVariableType *> adjTypeVarsToVisit;
+    switch (kind) {
+    case GatheringKind::EquivalenceClass:
+      adjTypeVarsToVisit = adjTypeVar;
+      break;
+
+    case GatheringKind::AllMentions:
+      adjTypeVarsToVisit
+        = (*this)[CS.getRepresentative(adjTypeVar)].getEquivalenceClass();
+      break;
+    }
+
+    for (auto adjTypeVarEquiv : adjTypeVarsToVisit) {
+      if (!typeVars.insert(adjTypeVarEquiv).second)
+        continue;
+
+      for (auto constraint : (*this)[adjTypeVarEquiv].getConstraints())
+        constraints.push_back(constraint);
+    }
   }
 }
 
@@ -556,9 +594,9 @@ unsigned ConstraintGraph::computeConnectedComponents(
     if (CS.getFixedType(TypeVariables[i]))
       continue;
 
-    // If we only care about a subset, and this type variable isn't in that
-    // subset, skip it.
-    if (!typeVarSubset.empty() && typeVarSubset.count(TypeVariables[i]) == 0)
+    // If this type variable isn't in the subset of type variables we care
+    // about, skip it.
+    if (typeVarSubset.count(TypeVariables[i]) == 0)
       continue;
 
     componentHasUnboundTypeVar[components[i]] = true;
@@ -589,7 +627,7 @@ unsigned ConstraintGraph::computeConnectedComponents(
   }
   components.erase(components.begin() + outIndex, components.end());
 
-  return numComponents;
+  return numComponents + getOrphanedConstraints().size();
 }
 
 
@@ -649,7 +687,8 @@ bool ConstraintGraph::contractEdges() {
 
   for (auto tyvar : tyvars) {
     SmallVector<Constraint *, 4> constraints;
-    gatherConstraints(tyvar, constraints);
+    gatherConstraints(tyvar, constraints,
+                      ConstraintGraph::GatheringKind::EquivalenceClass);
 
     for (auto constraint : constraints) {
       auto kind = constraint->getKind();
@@ -740,23 +779,8 @@ void ConstraintGraph::removeEdge(Constraint *constraint) {
     }
   }
 
-  size_t index = 0;
-  for (auto generated : CS.solverState->generatedConstraints) {
-    if (generated == constraint) {
-      unsigned last = CS.solverState->generatedConstraints.size()-1;
-      auto lastConstraint = CS.solverState->generatedConstraints[last];
-      if (lastConstraint == generated) {
-        CS.solverState->generatedConstraints.pop_back();
-        break;
-      } else {
-        CS.solverState->generatedConstraints[index] = lastConstraint;
-        CS.solverState->generatedConstraints[last] = constraint;
-        CS.solverState->generatedConstraints.pop_back();
-        break;
-      }
-    }
-    index++;
-  }
+  if (CS.solverState)
+    CS.solverState->removeGeneratedConstraint(constraint);
 
   removeConstraint(constraint);
 }
@@ -853,6 +877,7 @@ void ConstraintGraph::dump() {
 
 void ConstraintGraph::printConnectedComponents(llvm::raw_ostream &out) {
   SmallVector<TypeVariableType *, 16> typeVars;
+  typeVars.append(TypeVariables.begin(), TypeVariables.end());
   SmallVector<unsigned, 16> components;
   unsigned numComponents = computeConnectedComponents(typeVars, components);
   for (unsigned component = 0; component != numComponents; ++component) {

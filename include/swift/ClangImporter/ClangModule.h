@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -17,6 +17,7 @@
 #define SWIFT_CLANGIMPORTER_CLANGMODULE_H
 
 #include "swift/AST/Module.h"
+#include "swift/ClangImporter/ClangImporter.h"
 
 namespace clang {
   class ASTContext;
@@ -26,15 +27,14 @@ namespace clang {
 namespace swift {
 
 class ASTContext;
-class ClangImporter;
 class ModuleLoader;
 
 /// \brief Represents a Clang module that has been imported into Swift.
 class ClangModuleUnit final : public LoadedFile {
-  ClangImporter &owner;
+  ClangImporter::Implementation &owner;
   const clang::Module *clangModule;
   llvm::PointerIntPair<ModuleDecl *, 1, bool> adapterModule;
-  mutable ArrayRef<Module::ImportedModule> importedModulesForLookup;
+  mutable ArrayRef<ModuleDecl::ImportedModule> importedModulesForLookup;
 
   ~ClangModuleUnit() = default;
 
@@ -42,7 +42,7 @@ public:
   /// True if the given Module contains an imported Clang module unit.
   static bool hasClangModule(ModuleDecl *M);
 
-  ClangModuleUnit(ModuleDecl &M, ClangImporter &owner,
+  ClangModuleUnit(ModuleDecl &M, ClangImporter::Implementation &owner,
                   const clang::Module *clangModule);
 
   /// \brief Retrieve the underlying Clang module.

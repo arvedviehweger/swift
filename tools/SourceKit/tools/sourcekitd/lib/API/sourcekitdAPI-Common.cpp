@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -43,6 +43,7 @@ UIdent sourcekitd::KeySourceFile("key.sourcefile");
 UIdent sourcekitd::KeySourceText("key.sourcetext");
 UIdent sourcekitd::KeyModuleName("key.modulename");
 UIdent sourcekitd::KeyGroupName("key.groupname");
+UIdent sourcekitd::KeyActionName("key.actionname");
 UIdent sourcekitd::KeySynthesizedExtension("key.synthesizedextensions");
 UIdent sourcekitd::KeyNotification("key.notification");
 UIdent sourcekitd::KeyKeyword("key.keyword");
@@ -53,6 +54,8 @@ UIdent sourcekitd::KeyEnableSyntaxMap("key.enablesyntaxmap");
 UIdent sourcekitd::KeyEnableDiagnostics("key.enablediagnostics");
 UIdent sourcekitd::KeySyntacticOnly("key.syntactic_only");
 UIdent sourcekitd::KeyLength("key.length");
+UIdent sourcekitd::KeyActionable("key.actionable");
+UIdent sourcekitd::KeyParentLoc("key.parent_loc");
 UIdent sourcekitd::KeyKind("key.kind");
 UIdent sourcekitd::KeyAccessibility("key.accessibility");
 UIdent sourcekitd::KeySetterAccessibility("key.setter_accessibility");
@@ -135,6 +138,12 @@ UIdent sourcekitd::KeyTypeInterface("key.typeinterface");
 UIdent sourcekitd::KeyTypeUsr("key.typeusr");
 UIdent sourcekitd::KeyContainerTypeUsr("key.containertypeusr");
 UIdent sourcekitd::KeyModuleGroups("key.modulegroups");
+
+UIdent sourcekitd::KeyBaseName("key.basename");
+UIdent sourcekitd::KeyArgNames("key.argnames");
+UIdent sourcekitd::KeySelectorPieces("key.selectorpieces");
+UIdent sourcekitd::KeyNameKind("key.namekind");
+UIdent sourcekitd::KeyLocalizationKey("key.localization_key");
 
 /// \brief Order for the keys to use when emitting the debug description of
 /// dictionaries.
@@ -229,6 +238,12 @@ static UIdent *OrderedKeys[] = {
   &KeyTypeUsr,
   &KeyContainerTypeUsr,
   &KeyModuleGroups,
+
+  &KeyBaseName,
+  &KeyArgNames,
+  &KeySelectorPieces,
+  &KeyNameKind,
+
 };
 
 static unsigned findPrintOrderForDictKey(UIdent Key) {
@@ -271,11 +286,12 @@ public:
     case SOURCEKITD_VARIANT_TYPE_DICTIONARY: {
       DictMap Dict;
       DictMap &DictRef = Dict;
-      sourcekitd_variant_dictionary_apply(Obj, ^(sourcekitd_uid_t key,
-                                                 sourcekitd_variant_t value) {
-        DictRef.push_back({ UIdentFromSKDUID(key), value });
-        return true;
-      });
+      sourcekitd_variant_dictionary_apply_impl(
+          Obj,
+          [&](sourcekitd_uid_t key, sourcekitd_variant_t value) {
+            DictRef.push_back({UIdentFromSKDUID(key), value});
+            return true;
+          });
       std::sort(Dict.begin(), Dict.end(), compKeys);
       return static_cast<ImplClass*>(this)->visitDictionary(Dict);
     }
@@ -307,14 +323,14 @@ public:
   }
 };
 
-class VariantPrinter : public VariantVisitor<VariantPrinter>,   
+class VariantPrinter : public VariantVisitor<VariantPrinter>,
                        public RequestResponsePrinterBase<VariantPrinter,
                                                          sourcekitd_variant_t> {
 public:
   VariantPrinter(raw_ostream &OS, unsigned Indent = 0, bool PrintAsJSON = false)
     : RequestResponsePrinterBase(OS, Indent, PrintAsJSON) { }
 };
-}
+} // end anonymous namespace
 
 void sourcekitd::writeEscaped(llvm::StringRef Str, llvm::raw_ostream &OS) {
   for (unsigned i = 0, e = Str.size(); i != e; ++i) {
@@ -527,15 +543,15 @@ sourcekitd_variant_dictionary_get_value(sourcekitd_variant_t dict,
 
   // Default implementation:
   // Linear search for the key/value pair via sourcekitd_variant_dictionary_apply.
-  __block sourcekitd_variant_t result = makeNullVariant();
-  sourcekitd_variant_dictionary_apply(dict,
-    ^bool(sourcekitd_uid_t curr_key, sourcekitd_variant_t curr_value) {
-      if (curr_key == key) {
-        result = curr_value;
-        return false;
-      }
-      return true;
-    });
+  sourcekitd_variant_t result = makeNullVariant();
+  sourcekitd_variant_dictionary_apply_impl(
+      dict, [&](sourcekitd_uid_t curr_key, sourcekitd_variant_t curr_value) {
+        if (curr_key == key) {
+          result = curr_value;
+          return false;
+        }
+        return true;
+      });
 
   return result;
 }
@@ -588,9 +604,18 @@ sourcekitd_variant_dictionary_get_uid(sourcekitd_variant_t dict,
              sourcekitd_variant_dictionary_get_value(dict, key));
 }
 
+#if SOURCEKITD_HAS_BLOCKS
 bool
 sourcekitd_variant_dictionary_apply(sourcekitd_variant_t dict,
                               sourcekitd_variant_dictionary_applier_t applier) {
+  return sourcekitd_variant_dictionary_apply_impl(dict, applier);
+}
+#endif
+
+bool
+sourcekitd_variant_dictionary_apply_impl(
+  sourcekitd_variant_t dict,
+  llvm::function_ref<bool(sourcekitd_uid_t, sourcekitd_variant_t)> applier) {
   if (auto fn = VAR_FN(dict, dictionary_apply))
     return fn(dict, applier);
 
@@ -603,10 +628,11 @@ bool
 sourcekitd_variant_dictionary_apply_f(sourcekitd_variant_t dict,
                               sourcekitd_variant_dictionary_applier_f_t applier,
                               void *context) {
-  return sourcekitd_variant_dictionary_apply(dict,
-    ^bool(sourcekitd_uid_t key, sourcekitd_variant_t value) {
-      return applier(key, value, context);
-    });
+  return sourcekitd_variant_dictionary_apply_impl(
+      dict,
+      [&](sourcekitd_uid_t key, sourcekitd_variant_t value) {
+          return applier(key, value, context);
+  });
 }
 
 size_t
@@ -671,9 +697,17 @@ sourcekitd_variant_array_get_uid(sourcekitd_variant_t array, size_t index) {
              sourcekitd_variant_array_get_value(array, index));
 }
 
+#if SOURCEKITD_HAS_BLOCKS
 bool
 sourcekitd_variant_array_apply(sourcekitd_variant_t array,
                                sourcekitd_variant_array_applier_t applier) {
+  return sourcekitd_variant_array_apply_impl(array, applier);
+}
+#endif
+
+bool sourcekitd_variant_array_apply_impl(
+    sourcekitd_variant_t array,
+    llvm::function_ref<bool(size_t, sourcekitd_variant_t)> applier) {
   if (auto fn = VAR_FN(array, array_apply))
     return fn(array, applier);
 
@@ -687,14 +721,13 @@ sourcekitd_variant_array_apply(sourcekitd_variant_t array,
   return true;
 }
 
-bool
-sourcekitd_variant_array_apply_f(sourcekitd_variant_t array,
-                                 sourcekitd_variant_array_applier_f_t applier,
-                                 void *context) {
-  return sourcekitd_variant_array_apply(array,
-    ^bool(size_t index, sourcekitd_variant_t value) {
-      return applier(index, value, context);
-    });
+bool sourcekitd_variant_array_apply_f(
+    sourcekitd_variant_t array, sourcekitd_variant_array_applier_f_t applier,
+    void *context) {
+  return sourcekitd_variant_array_apply_impl(
+      array, [&](size_t index, sourcekitd_variant_t value) {
+        return applier(index, value, context);
+      });
 }
 
 int64_t
@@ -806,7 +839,7 @@ private:
     return true;
   }
 };
-} // anonymous namespace.
+} // anonymous namespace
 
 sourcekitd_object_t
 sourcekitd_request_create_from_yaml(const char *yaml, char **error) {

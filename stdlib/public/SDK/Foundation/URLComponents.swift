@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -219,7 +219,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfUser: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfUser})
+        return _toStringRange(_handle.map { $0.rangeOfUser })
     }
     
     /// Returns the character range of the password in the string returned by `var string`.
@@ -228,7 +228,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfPassword: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfPassword})
+        return _toStringRange(_handle.map { $0.rangeOfPassword })
     }
     
     /// Returns the character range of the host in the string returned by `var string`.
@@ -237,7 +237,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfHost: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfHost})
+        return _toStringRange(_handle.map { $0.rangeOfHost })
     }
     
     /// Returns the character range of the port in the string returned by `var string`.
@@ -246,7 +246,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfPort: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfPort})
+        return _toStringRange(_handle.map { $0.rangeOfPort })
     }
     
     /// Returns the character range of the path in the string returned by `var string`.
@@ -255,7 +255,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfPath: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfPath})
+        return _toStringRange(_handle.map { $0.rangeOfPath })
     }
     
     /// Returns the character range of the query in the string returned by `var string`.
@@ -264,7 +264,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfQuery: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfQuery})
+        return _toStringRange(_handle.map { $0.rangeOfQuery })
     }
     
     /// Returns the character range of the fragment in the string returned by `var string`.
@@ -273,7 +273,7 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: Zero length components are legal. For example, the URL string "scheme://:@/?#" has a zero length user, password, host, query and fragment; the URL strings "scheme:" and "" both have a zero length path.
     @available(OSX 10.11, iOS 9.0, *)
     public var rangeOfFragment: Range<String.Index>? {
-        return _toStringRange(_handle.map { $0.rangeOfFragment})
+        return _toStringRange(_handle.map { $0.rangeOfFragment })
     }
 
     /// Returns an array of query items for this `URLComponents`, in the order in which they appear in the original query string.
@@ -287,8 +287,8 @@ public struct URLComponents : ReferenceConvertible, Hashable, Equatable, _Mutabl
     /// - note: If a name-value pair in a query is empty (i.e. the query string starts with '&', ends with '&', or has "&&" within it), you get a `URLQueryItem` with a zero-length name and a nil value. If a query's name-value pair has nothing before the equals sign, you get a zero-length name. If a query's name-value pair has nothing after the equals sign, you get a zero-length value. If a query's name-value pair has no equals sign, the query name-value pair string is the name and you get a nil value.
     @available(OSX 10.10, iOS 8.0, *)
     public var queryItems: [URLQueryItem]? {
-        get { return _handle.map { $0.queryItems?.map { return $0 as URLQueryItem } } }
-        set { _applyMutation { $0.queryItems = newValue?.map { $0 } } }
+        get { return _handle.map { $0.queryItems } }
+        set { _applyMutation { $0.queryItems = newValue } }
     }
     
     public var hashValue: Int {
@@ -427,9 +427,10 @@ extension URLQueryItem : CustomStringConvertible, CustomDebugStringConvertible, 
     }
 
     public var customMirror: Mirror {
-        var c: [(label: String?, value: Any)] = []
-        c.append((label: "name", value: name))
-        c.append((label: "value", value: value))
+        let c: [(label: String?, value: Any)] = [
+          ("name", name),
+          ("value", value as Any),
+        ]
         return Mirror(self, children: c, displayStyle: Mirror.DisplayStyle.struct)
     }
 }

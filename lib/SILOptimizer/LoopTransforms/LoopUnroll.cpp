@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -67,7 +67,7 @@ protected:
   }
 };
 
-} // End anonymous namespace.
+} // end anonymous namespace
 
 void LoopCloner::cloneLoop() {
   auto *Header = Loop->getHeader();
@@ -83,8 +83,8 @@ void LoopCloner::cloneLoop() {
 
   // Clone the arguments.
   for (auto *Arg : Header->getArguments()) {
-    SILValue MappedArg =
-        ClonedHeader->createArgument(getOpType(Arg->getType()));
+    SILValue MappedArg = ClonedHeader->createPHIArgument(
+        getOpType(Arg->getType()), ValueOwnershipKind::Owned);
     ValueMap.insert(std::make_pair(Arg, MappedArg));
   }
 
@@ -110,7 +110,8 @@ static Optional<uint64_t> getMaxLoopTripCount(SILLoop *Loop,
 
   // Skip a split backedge.
   SILBasicBlock *OrigLatch = Latch;
-  if (!Loop->isLoopExiting(Latch) && !(Latch = Latch->getSinglePredecessor()))
+  if (!Loop->isLoopExiting(Latch) &&
+      !(Latch = Latch->getSinglePredecessorBlock()))
     return None;
   if (!Loop->isLoopExiting(Latch))
     return None;
@@ -121,17 +122,30 @@ static Optional<uint64_t> getMaxLoopTripCount(SILLoop *Loop,
     return None;
 
   // Match an add 1 recurrence.
-  SILArgument *RecArg;
+  SILPHIArgument *RecArg;
   IntegerLiteralInst *End;
   SILValue RecNext;
 
+  unsigned Adjust = 0;
+
   if (!match(CondBr->getCondition(),
              m_BuiltinInst(BuiltinValueKind::ICMP_EQ, m_SILValue(RecNext),
-                           m_IntegerLiteralInst(End))))
-    return None;
+                           m_IntegerLiteralInst(End))) &&
+      !match(CondBr->getCondition(),
+             m_BuiltinInst(BuiltinValueKind::ICMP_SGE, m_SILValue(RecNext),
+                           m_IntegerLiteralInst(End)))) {
+    if (!match(CondBr->getCondition(),
+               m_BuiltinInst(BuiltinValueKind::ICMP_SGT, m_SILValue(RecNext),
+                             m_IntegerLiteralInst(End))))
+      return None;
+    // Otherwise, we have a greater than comparison.
+    else
+      Adjust = 1;
+  }
+
   if (!match(RecNext,
              m_TupleExtractInst(m_ApplyInst(BuiltinValueKind::SAddOver,
-                                            m_SILArgument(RecArg), m_One()),
+                                            m_SILPHIArgument(RecArg), m_One()),
                                 0)))
     return None;
 
@@ -158,7 +172,7 @@ static Optional<uint64_t> getMaxLoopTripCount(SILLoop *Loop,
   if (Dist == 0)
     return None;
 
-  return Dist.getZExtValue();
+  return Dist.getZExtValue() + Adjust;
 }
 
 /// Check whether we can duplicate the instructions in the loop and use a
@@ -215,8 +229,8 @@ static void redirectTerminator(SILBasicBlock *Latch, unsigned CurLoopIter,
     // On the last iteration change the conditional exit to an unconditional
     // one.
     if (CurLoopIter == LastLoopIter) {
-      auto *CondBr =
-          cast<CondBranchInst>(Latch->getSinglePredecessor()->getTerminator());
+      auto *CondBr = cast<CondBranchInst>(
+          Latch->getSinglePredecessorBlock()->getTerminator());
       if (CondBr->getTrueBB() != Latch)
         SILBuilder(CondBr).createBranch(CondBr->getLoc(), CondBr->getTrueBB(),
                                         CondBr->getTrueArgs());
@@ -423,8 +437,6 @@ namespace {
 
 class LoopUnrolling : public SILFunctionTransform {
 
-  StringRef getName() override { return "SIL Loop Unrolling"; }
-
   void run() override {
     bool Changed = false;
 
@@ -456,7 +468,7 @@ class LoopUnrolling : public SILFunctionTransform {
   }
 };
 
-} // end anonymous namespace.
+} // end anonymous namespace
 
 SILTransform *swift::createLoopUnroll() {
   return new LoopUnrolling();

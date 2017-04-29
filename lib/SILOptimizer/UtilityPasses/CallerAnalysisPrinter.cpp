@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -15,7 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/SILOptimizer/Analysis/CallerAnalysis.h"
-#include "swift/Basic/DemangleWrappers.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
@@ -40,7 +39,6 @@ class CallerAnalysisPrinterPass : public SILModuleTransform {
     }
   }
 
-  StringRef getName() override { return "Caller Analysis Printer"; }
 };
 
 } // end anonymous namespace

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,7 +21,6 @@
 #include "swift/SIL/SILCloner.h"
 #include "swift/SIL/SILDebugScope.h"
 #include "swift/SIL/SILVisitor.h"
-#include "swift/AST/AST.h"
 #include "swift/Basic/AssertImplements.h"
 #include "swift/ClangImporter/ClangModule.h"
 #include "swift/SIL/SILModule.h"
@@ -59,7 +58,7 @@ void SILInstruction::setDebugScope(SILBuilder &B, const SILDebugScope *DS) {
 // reconstruct the BB from the 'self' pointer of the trait.
 SILBasicBlock *llvm::ilist_traits<SILInstruction>::getContainingBlock() {
   size_t Offset(
-      size_t(&((SILBasicBlock *)0->*SILBasicBlock::getSublistAccess())));
+      size_t(&((SILBasicBlock *)nullptr->*SILBasicBlock::getSublistAccess())));
   iplist<SILInstruction> *Anchor(static_cast<iplist<SILInstruction> *>(this));
   return reinterpret_cast<SILBasicBlock *>(reinterpret_cast<char *>(Anchor) -
                                            Offset);
@@ -67,20 +66,19 @@ SILBasicBlock *llvm::ilist_traits<SILInstruction>::getContainingBlock() {
 
 
 void llvm::ilist_traits<SILInstruction>::addNodeToList(SILInstruction *I) {
-  assert(I->ParentBB == 0 && "Already in a list!");
+  assert(I->ParentBB == nullptr && "Already in a list!");
   I->ParentBB = getContainingBlock();
 }
 
 void llvm::ilist_traits<SILInstruction>::removeNodeFromList(SILInstruction *I) {
   // When an instruction is removed from a BB, clear the parent pointer.
   assert(I->ParentBB && "Not in a list!");
-  I->ParentBB = 0;
+  I->ParentBB = nullptr;
 }
 
 void llvm::ilist_traits<SILInstruction>::
 transferNodesFromList(llvm::ilist_traits<SILInstruction> &L2,
-                      llvm::ilist_iterator<SILInstruction> first,
-                      llvm::ilist_iterator<SILInstruction> last) {
+                      instr_iterator first, instr_iterator last) {
   // If transferring instructions within the same basic block, no reason to
   // update their parent pointers.
   SILBasicBlock *ThisParent = getContainingBlock();
@@ -267,6 +265,29 @@ namespace {
       return true;
     }
 
+    bool visitBeginAccessInst(const BeginAccessInst *right) {
+      auto left = cast<BeginAccessInst>(LHS);
+      return left->getAccessKind() == right->getAccessKind()
+          && left->getEnforcement() == right->getEnforcement();
+    }
+
+    bool visitEndAccessInst(const EndAccessInst *right) {
+      auto left = cast<EndAccessInst>(LHS);
+      return left->isAborting() == right->isAborting();
+    }
+
+    bool visitBeginUnpairedAccessInst(const BeginUnpairedAccessInst *right) {
+      auto left = cast<BeginUnpairedAccessInst>(LHS);
+      return left->getAccessKind() == right->getAccessKind()
+          && left->getEnforcement() == right->getEnforcement();
+    }
+
+    bool visitEndUnpairedAccessInst(const EndUnpairedAccessInst *right) {
+      auto left = cast<EndUnpairedAccessInst>(LHS);
+      return left->getEnforcement() == right->getEnforcement()
+          && left->isAborting() == right->isAborting();
+    }
+
     bool visitStrongReleaseInst(const StrongReleaseInst *RHS) {
       return true;
     }
@@ -287,6 +308,12 @@ namespace {
     bool visitLoadBorrowInst(const LoadBorrowInst *RHS) { return true; }
 
     bool visitEndBorrowInst(const EndBorrowInst *RHS) { return true; }
+    bool visitBeginBorrowInst(const BeginBorrowInst *BBI) { return true; }
+
+    bool visitStoreBorrowInst(const StoreBorrowInst *RHS) {
+      auto *X = cast<StoreBorrowInst>(LHS);
+      return X->getSrc() == RHS->getSrc() && X->getDest() == RHS->getDest();
+    }
 
     bool visitStoreInst(const StoreInst *RHS) {
       auto *X = cast<StoreInst>(LHS);
@@ -335,6 +362,12 @@ namespace {
         && LHS_->getValue().equals(RHS->getValue());
     }
 
+    bool visitConstStringLiteralInst(const ConstStringLiteralInst *RHS) {
+      auto LHS_ = cast<ConstStringLiteralInst>(LHS);
+      return LHS_->getEncoding() == RHS->getEncoding() &&
+             LHS_->getValue().equals(RHS->getValue());
+    }
+
     bool visitStructInst(const StructInst *RHS) {
       // We have already checked the operands. Make sure that the StructDecls
       // match up.
@@ -365,9 +398,7 @@ namespace {
 
     bool visitRefTailAddrInst(RefTailAddrInst *RHS) {
       auto *X = cast<RefTailAddrInst>(LHS);
-      if (X->getTailType() != RHS->getTailType())
-        return false;
-      return true;
+      return X->getTailType() == RHS->getTailType();
     }
 
     bool visitStructElementAddrInst(const StructElementAddrInst *RHS) {
@@ -443,9 +474,7 @@ namespace {
 
     bool visitTailAddrInst(TailAddrInst *RHS) {
       auto *X = cast<TailAddrInst>(LHS);
-      if (X->getTailType() != RHS->getTailType())
-        return false;
-      return true;
+      return X->getTailType() == RHS->getTailType();
     }
 
     bool visitCondFailInst(CondFailInst *RHS) {
@@ -664,7 +693,7 @@ namespace {
   private:
     const SILInstruction *LHS;
   };
-}
+} // end anonymous namespace
 
 bool SILInstruction::hasIdenticalState(const SILInstruction *RHS) const {
   SILInstruction *UnconstRHS = const_cast<SILInstruction *>(RHS);
@@ -809,7 +838,8 @@ SILInstruction::MemoryBehavior SILInstruction::getMemoryBehavior() const {
   case ValueKind::CLASS:                                                       \
     return MemoryBehavior::MEMBEHAVIOR;
 #include "swift/SIL/SILNodes.def"
-  case ValueKind::SILArgument:
+  case ValueKind::SILPHIArgument:
+  case ValueKind::SILFunctionArgument:
   case ValueKind::SILUndef:
     llvm_unreachable("Non-instructions are unreachable.");
   }
@@ -822,9 +852,10 @@ SILInstruction::ReleasingBehavior SILInstruction::getReleasingBehavior() const {
   case ValueKind::CLASS:                                                       \
     return ReleasingBehavior::RELEASINGBEHAVIOR;
 #include "swift/SIL/SILNodes.def"
- case ValueKind::SILArgument:
- case ValueKind::SILUndef:
-   llvm_unreachable("Non-instructions are unreachable.");
+  case ValueKind::SILPHIArgument:
+  case ValueKind::SILFunctionArgument:
+  case ValueKind::SILUndef:
+    llvm_unreachable("Non-instructions are unreachable.");
   }
   llvm_unreachable("We've just exhausted the switch.");
 }
@@ -855,6 +886,10 @@ bool SILInstruction::mayRelease() const {
   case ValueKind::StrongReleaseInst:
   case ValueKind::UnownedReleaseInst:
   case ValueKind::ReleaseValueInst:
+    return true;
+
+  case ValueKind::DestroyValueInst:
+    assert(!SILModuleConventions(getModule()).useLoweredAddresses());
     return true;
 
   case ValueKind::UnconditionalCheckedCastAddrInst: {
@@ -941,7 +976,7 @@ namespace {
     }
     SILBasicBlock *remapBasicBlock(SILBasicBlock *BB) { return BB; }
   };
-}
+} // end anonymous namespace
 
 bool SILInstruction::isAllocatingStack() const {
   if (isa<AllocStackInst>(this))
@@ -982,6 +1017,9 @@ SILInstruction *SILInstruction::clone(SILInstruction *InsertPt) {
 /// additional handling. It is important to know this information when
 /// you perform such optimizations like e.g. jump-threading.
 bool SILInstruction::isTriviallyDuplicatable() const {
+  if (isa<ThrowInst>(this))
+    return false;
+
   if (isa<AllocStackInst>(this) || isa<DeallocStackInst>(this)) {
     return false;
   }
@@ -990,9 +1028,9 @@ bool SILInstruction::isTriviallyDuplicatable() const {
       return false;
   }
 
-  if (isa<OpenExistentialAddrInst>(this) ||
-      isa<OpenExistentialRefInst>(this) ||
-      isa<OpenExistentialMetatypeInst>(this)) {
+  if (isa<OpenExistentialAddrInst>(this) || isa<OpenExistentialRefInst>(this) ||
+      isa<OpenExistentialMetatypeInst>(this) ||
+      isa<OpenExistentialOpaqueInst>(this)) {
     // Don't know how to duplicate these properly yet. Inst.clone() per
     // instruction does not work. Because the follow-up instructions need to
     // reuse the same archetype uuid which would only work if we used a
@@ -1038,6 +1076,8 @@ llvm::raw_ostream &swift::operator<<(llvm::raw_ostream &OS,
     case SILInstruction::MemoryBehavior::MayHaveSideEffects:
       return OS << "MayHaveSideEffects";
   }
+
+  llvm_unreachable("Unhandled MemoryBehavior in switch.");
 }
 
 llvm::raw_ostream &swift::operator<<(llvm::raw_ostream &OS,
@@ -1048,4 +1088,6 @@ llvm::raw_ostream &swift::operator<<(llvm::raw_ostream &OS,
   case SILInstruction::ReleasingBehavior::MayRelease:
     return OS << "MayRelease";
   }
+
+  llvm_unreachable("Unhandled ReleasingBehavior in switch.");
 }

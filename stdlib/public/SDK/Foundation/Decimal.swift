@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 @_exported import Foundation // Clang module
+import _SwiftCoreFoundationOverlayShims
 
 extension Decimal {
     public typealias RoundingMode = NSDecimalNumber.RoundingMode
@@ -56,26 +57,6 @@ extension Decimal {
 
     @available(*, unavailable, message: "Decimal does not yet fully adopt FloatingPoint.")
     public mutating func formTruncatingRemainder(dividingBy other: Decimal) { fatalError("Decimal does not yet fully adopt FloatingPoint") }
-
-    public mutating func add(_ other: Decimal) {
-        var rhs = other
-        NSDecimalAdd(&self, &self, &rhs, .plain)
-    }
-
-    public mutating func subtract(_ other: Decimal) {
-        var rhs = other
-        NSDecimalSubtract(&self, &self, &rhs, .plain)
-    }
-
-    public mutating func multiply(by other: Decimal) {
-        var rhs = other
-        NSDecimalMultiply(&self, &self, &rhs, .plain)
-    }
-
-    public mutating func divide(by other: Decimal) {
-        var rhs = other
-        NSDecimalDivide(&self, &self, &rhs, .plain)
-    }
 
     public mutating func negate() {
         _isNegative = _isNegative == 0 ? 1 : 0
@@ -156,7 +137,6 @@ extension Decimal {
         NSDecimalMultiply(&res, &leftOp, &rightOp, .plain)
         return res
     }
-
 }
 
 public func pow(_ x: Decimal, _ y: Int) -> Decimal {
@@ -178,28 +158,20 @@ extension Decimal : Hashable, Comparable {
             switch index {
             case 0:
                 d = d * 65536 + Double(_mantissa.0)
-                break
             case 1:
                 d = d * 65536 + Double(_mantissa.1)
-                break
             case 2:
                 d = d * 65536 + Double(_mantissa.2)
-                break
             case 3:
                 d = d * 65536 + Double(_mantissa.3)
-                break
             case 4:
                 d = d * 65536 + Double(_mantissa.4)
-                break
             case 5:
                 d = d * 65536 + Double(_mantissa.5)
-                break
             case 6:
                 d = d * 65536 + Double(_mantissa.6)
-                break
             case 7:
                 d = d * 65536 + Double(_mantissa.7)
-                break
             default:
                 fatalError("conversion overflow")
             }
@@ -246,7 +218,65 @@ extension Decimal : ExpressibleByIntegerLiteral {
     }
 }
 
-extension Decimal : SignedNumber { }
+extension Decimal : SignedNumeric {
+  public var magnitude: Decimal {
+    return Decimal(
+      _exponent: self._exponent, _length: self._length,
+       _isNegative: 0, _isCompact: self._isCompact,
+       _reserved: 0, _mantissa: self._mantissa)
+  }
+
+  // FIXME(integers): implement properly
+  public init?<T : BinaryInteger>(exactly source: T) {
+    fatalError()
+  }
+
+  public static func +=(_ lhs: inout Decimal, _ rhs: Decimal) {
+      var rhs = rhs
+      NSDecimalAdd(&lhs, &lhs, &rhs, .plain)
+  }
+
+  public static func -=(_ lhs: inout Decimal, _ rhs: Decimal) {
+      var rhs = rhs
+      NSDecimalSubtract(&lhs, &lhs, &rhs, .plain)
+  }
+
+  public static func *=(_ lhs: inout Decimal, _ rhs: Decimal) {
+      var rhs = rhs
+      NSDecimalMultiply(&lhs, &lhs, &rhs, .plain)
+  }
+
+  public static func /=(_ lhs: inout Decimal, _ rhs: Decimal) {
+      var rhs = rhs
+      NSDecimalDivide(&lhs, &lhs, &rhs, .plain)
+  }
+}
+
+extension Decimal {
+  @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
+  @_transparent
+  public mutating func add(_ other: Decimal) {
+    self += other
+  }
+
+  @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
+  @_transparent
+  public mutating func subtract(_ other: Decimal) {
+    self -= other
+  }
+
+  @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
+  @_transparent
+  public mutating func multiply(by other: Decimal) {
+    self *= other
+  }
+
+  @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
+  @_transparent
+  public mutating func divide(by other: Decimal) {
+    self /= other
+  }
+}
 
 extension Decimal : Strideable {
     public func distance(to other: Decimal) -> Decimal {
@@ -255,12 +285,6 @@ extension Decimal : Strideable {
 
     public func advanced(by n: Decimal) -> Decimal {
         return self + n
-    }
-}
-
-extension Decimal : AbsoluteValuable {
-    public static func abs(_ x: Decimal) -> Decimal {
-        return Decimal(_exponent: x._exponent, _length: x._length, _isNegative: 0, _isCompact: x._isCompact, _reserved: 0, _mantissa: x._mantissa)
     }
 }
 
@@ -315,28 +339,20 @@ extension Decimal {
                 switch i {
                     case 0:
                         _mantissa.0 = UInt16(mantissa & 0xffff)
-                        break
                     case 1:
                         _mantissa.1 = UInt16(mantissa & 0xffff)
-                        break
                     case 2:
                         _mantissa.2 = UInt16(mantissa & 0xffff)
-                        break
                     case 3:
                         _mantissa.3 = UInt16(mantissa & 0xffff)
-                        break
                     case 4:
                         _mantissa.4 = UInt16(mantissa & 0xffff)
-                        break
                     case 5:
                         _mantissa.5 = UInt16(mantissa & 0xffff)
-                        break
                     case 6:
                         _mantissa.6 = UInt16(mantissa & 0xffff)
-                        break
                     case 7:
                         _mantissa.7 = UInt16(mantissa & 0xffff)
-                        break
                     default:
                         fatalError("initialization overflow")
                 }

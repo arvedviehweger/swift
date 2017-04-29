@@ -1,8 +1,5 @@
+#ifdef __OBJC__
 #pragma clang assume_nonnull begin
-
-__attribute__((objc_root_class))
-@interface Base
-@end
 
 @interface TestProperties: Base
 @property (nonatomic, readwrite, retain) id accessorsOnly;
@@ -27,4 +24,10 @@ __attribute__((objc_root_class))
 @property (nonatomic, readwrite, retain) id accessorsOnlyWithNewType;
 @end
 
+@interface TestProperties (AccessorsOnlyCustomized)
+@property (nonatomic, readwrite, retain, null_resettable) id accessorsOnlyRenamedRetyped;
+@property (class, nonatomic, readwrite, retain, null_resettable) id accessorsOnlyRenamedRetypedClass;
+@end
+
 #pragma clang assume_nonnull end
+#endif // __OBJC__

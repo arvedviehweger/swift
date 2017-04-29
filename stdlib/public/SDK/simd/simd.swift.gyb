@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -527,8 +527,15 @@ public func refract(_ x: ${vectype},
                            n: ${vectype},
                            eta: ${type})
                              -> ${vectype} {
-  let k = 1 - eta * eta * (1 - dot(x, n) * dot(x, n))
-  if k >= 0 { return eta * x - (eta * dot(x, n) + sqrt(k)) * n }
+  // FIXME(integers): extra variables were introduced to speed up compilation.
+  let etaSquared = eta * eta
+  let dotSquared = dot(x, n) * dot(x, n)
+  let k = 1 - etaSquared * (1 - dotSquared)
+  if k >= 0 {
+    let etaX = eta * x
+    let etaDot = eta * dot(x, n)
+    return etaX - (etaDot + sqrt(k)) * n
+  }
   return ${vectype}(0)
 }
 

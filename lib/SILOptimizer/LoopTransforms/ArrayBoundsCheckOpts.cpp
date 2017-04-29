@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -203,8 +203,8 @@ static bool isIdentifiedUnderlyingArrayObject(SILValue V) {
     return true;
 
   // Function arguments are safe.
-  if (auto Arg = dyn_cast<SILArgument>(V))
-    return Arg->isFunctionArg();
+  if (isa<SILFunctionArgument>(V))
+    return true;
 
   return false;
 }
@@ -651,9 +651,7 @@ static bool isLessThanCheck(SILValue Start, SILValue End,
       // Special case: if it is a 0-to-count loop, we know that the count cannot
       // be negative. In this case the 'Start < End' check can also be done with
       // 'count != 0'.
-      if (getZeroToCountArray(Start, End))
-        return true;
-      return false;
+      return getZeroToCountArray(Start, End);
     default:
       return false;
   }
@@ -668,7 +666,7 @@ static bool isRangeChecked(SILValue Start, SILValue End,
     return true;
 
   // Look for a branch on EQ around the Preheader.
-  auto *PreheaderPred = Preheader->getSinglePredecessor();
+  auto *PreheaderPred = Preheader->getSinglePredecessorBlock();
   if (!PreheaderPred)
     return false;
   auto *CondBr = dyn_cast<CondBranchInst>(PreheaderPred->getTerminator());
@@ -1182,9 +1180,9 @@ static bool hoistBoundsChecks(SILLoop *Loop, DominanceInfo *DT, SILLoopInfo *LI,
       return Changed;
 
     // Look back a split edge.
-    if (!Loop->isLoopExiting(Latch) && Latch->getSinglePredecessor() &&
-        Loop->isLoopExiting(Latch->getSinglePredecessor()))
-      Latch = Latch->getSinglePredecessor();
+    if (!Loop->isLoopExiting(Latch) && Latch->getSinglePredecessorBlock() &&
+        Loop->isLoopExiting(Latch->getSinglePredecessorBlock()))
+      Latch = Latch->getSinglePredecessorBlock();
     if (Loop->isLoopExiting(Latch) && Latch->getSuccessors().size() == 2) {
       ExitingBlk = Latch;
       ExitBlk = Loop->contains(Latch->getSuccessors()[0])
@@ -1311,8 +1309,6 @@ class ABCOpt : public SILFunctionTransform {
 public:
   ABCOpt() {}
 
-  StringRef getName() override { return "SIL Array bounds check optimization"; }
-
   void run() override {
     if (!EnableABCOpts)
       return;
@@ -1397,7 +1393,7 @@ public:
     }
   }
 };
-}
+} // end anonymous namespace
 
 SILTransform *swift::createABCOpt() {
   return new ABCOpt();

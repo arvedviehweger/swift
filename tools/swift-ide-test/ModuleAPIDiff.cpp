@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -83,10 +83,9 @@ generic-signature ::=
     GenericSignature:
         GenericParams:                  (ordered)
             - Name: <identifier>
-              (Superclass: <type-name>)?
         ConformanceRequirements:
             - Type: <type-name>
-              Protocol: <type-name>
+              ProtocolOrClass: <type-name>
         SameTypeRequirements:
             - FirstType: <type-name>
               SecondType: <type-name>
@@ -320,7 +319,6 @@ bool operator==(const NestedDecls &LHS, const NestedDecls &RHS) {
 
 struct GenericParam {
   Identifier Name;
-  Optional<TypeName> Superclass;
 };
 
 struct ConformanceRequirement {
@@ -507,7 +505,6 @@ template <> struct MappingTraits<::swift::sma::NestedDecls> {
 template <> struct MappingTraits<::swift::sma::GenericParam> {
   static void mapping(IO &io, ::swift::sma::GenericParam &ND) {
     io.mapRequired("Name", ND.Name);
-    io.mapOptional("Superclass", ND.Superclass);
   }
 };
 
@@ -745,9 +742,6 @@ public:
     for (auto *GTPT : GS->getGenericParams()) {
       sma::GenericParam ResultGP;
       ResultGP.Name = convertToIdentifier(GTPT->getName());
-      if (auto SuperclassTy = GTPT->getSuperclass(nullptr)) {
-        ResultGP.Superclass = convertToTypeName(SuperclassTy);
-      }
       ResultGS.GenericParams.emplace_back(std::move(ResultGP));
     }
     for (auto &Req : GS->getRequirements()) {
@@ -758,6 +752,10 @@ public:
             sma::ConformanceRequirement{
                 convertToTypeName(Req.getFirstType()),
                 convertToTypeName(Req.getSecondType())});
+        break;
+      case RequirementKind::Layout:
+        // FIXME
+        assert(false && "Not implemented");
         break;
       case RequirementKind::SameType:
         ResultGS.SameTypeRequirements.emplace_back(
@@ -832,7 +830,7 @@ public:
   void visitTypeAliasDecl(TypeAliasDecl *TAD) {
     auto ResultTD = std::make_shared<sma::TypealiasDecl>();
     ResultTD->Name = convertToIdentifier(TAD->getName());
-    ResultTD->Type = convertToTypeName(TAD->getUnderlyingType());
+    ResultTD->Type = convertToTypeName(TAD->getUnderlyingTypeLoc().getType());
     // FIXME
     // ResultTD->Attributes = ?;
     Result.Typealiases.emplace_back(std::move(ResultTD));
@@ -874,7 +872,7 @@ public:
   }
 };
 
-std::shared_ptr<sma::Module> createSMAModel(Module *M) {
+std::shared_ptr<sma::Module> createSMAModel(ModuleDecl *M) {
   SmallVector<Decl *, 1> Decls;
   M->getDisplayDecls(Decls);
 
@@ -920,13 +918,13 @@ int swift::doGenerateModuleAPIDescription(StringRef MainExecutablePath,
 
   CompilerInstance CI;
   CI.addDiagnosticConsumer(&PDC);
-  if (CI.setup(*Invocation.get()))
+  if (CI.setup(*Invocation))
     return 1;
   CI.performSema();
 
   PrintOptions Options = PrintOptions::printEverything();
 
-  Module *M = CI.getMainModule();
+  ModuleDecl *M = CI.getMainModule();
   M->getMainSourceFile(Invocation->getSourceFileKind()).print(llvm::outs(),
                                                         Options);
 

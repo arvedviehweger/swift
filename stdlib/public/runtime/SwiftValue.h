@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -52,10 +52,10 @@ getValueFromSwiftValue(_SwiftValue *v);
 /// or nil if it is not.
 _SwiftValue *getAsSwiftValue(id object);
 
-/// Find conformances for SwiftValue to the given list of protocols.
+/// Find conformances for SwiftValue to the given existential type.
 ///
 /// Returns true if SwiftValue does conform to all the protocols.
-bool findSwiftValueConformances(const ProtocolDescriptorList &protocols,
+bool findSwiftValueConformances(const ExistentialTypeMetadata *existentialType,
                                 const WitnessTable **tablesBuffer);
 
 } // namespace swift

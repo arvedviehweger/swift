@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -27,7 +27,7 @@ namespace {
 
 class LoopRegionViewText : public SILModuleTransform {
   void run() override {
-    invalidateAnalysis(SILAnalysis::InvalidationKind::Everything);
+    invalidateAll();
     LoopRegionAnalysis *LRA = PM->getAnalysis<LoopRegionAnalysis>();
     for (auto &Fn : *getModule()) {
       if (Fn.isExternalDeclaration()) continue;
@@ -39,7 +39,6 @@ class LoopRegionViewText : public SILModuleTransform {
     }
   }
 
-  virtual StringRef getName() override { return "LoopRegionViewText"; }
 };
 
 class LoopRegionViewCFG : public SILModuleTransform {
@@ -54,7 +53,6 @@ class LoopRegionViewCFG : public SILModuleTransform {
       LRA->get(&Fn)->viewLoopRegions();
     }
   }
-  virtual StringRef getName() override { return "LoopRegionViewCFG"; }
 };
 
 } // end anonymous namespace

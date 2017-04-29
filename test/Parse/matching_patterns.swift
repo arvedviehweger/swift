@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift -I %S/Inputs -enable-source-import
+// RUN: %target-typecheck-verify-swift -I %S/Inputs -enable-source-import
 
 import imported_enums
 
@@ -47,16 +47,15 @@ case 1 + (_): // expected-error{{'_' can only appear in a pattern or on the left
 }
 
 switch (x,x) {
-case (var a, var a): // expected-error {{definition conflicts with previous value}} expected-note {{previous definition of 'a' is here}}
+case (var a, var a): // expected-error {{definition conflicts with previous value}} expected-note {{previous definition of 'a' is here}} expected-warning {{variable 'a' was never used; consider replacing with '_' or removing it}} expected-warning {{variable 'a' was never used; consider replacing with '_' or removing it}}
   fallthrough
 case _:
   ()
 }
 
-
 var e : Any = 0
 
-switch e {
+switch e { // expected-error {{switch must be exhaustive, consider adding a default clause:}}
 // 'is' pattern.
 case is Int,
      is A<Int>,
@@ -101,7 +100,7 @@ enum Voluntary<T> : Equatable {
     }
 
     switch foo {
-    case .Naught: // expected-error{{enum case 'Naught' not found in type 'Foo'}}
+    case .Naught: // expected-error{{pattern cannot match values of type 'Foo'}}
       ()
     case .A, .B, .C:
       ()
@@ -138,7 +137,7 @@ case .Twain,
 var notAnEnum = 0
 
 switch notAnEnum {
-case .Foo: // expected-error{{enum case 'Foo' not found in type 'Int'}}
+case .Foo: // expected-error{{pattern cannot match values of type 'Int'}}
   ()
 }
 
@@ -150,7 +149,9 @@ struct ContainsEnum {
   }
 
   func member(_ n: Possible<Int>) {
-    switch n {
+    switch n { // expected-error {{switch must be exhaustive, consider adding missing cases:}}
+    // expected-note@-1 {{missing case: '.Mere(_)'}}
+    // expected-note@-2 {{missing case: '.Twain(_, _)'}}
     case ContainsEnum.Possible<Int>.Naught,
          ContainsEnum.Possible.Naught,
          Possible<Int>.Naught,
@@ -162,7 +163,9 @@ struct ContainsEnum {
 }
 
 func nonmemberAccessesMemberType(_ n: ContainsEnum.Possible<Int>) {
-  switch n {
+  switch n { // expected-error {{switch must be exhaustive, consider adding missing cases:}}
+  // expected-note@-1 {{missing case: '.Mere(_)'}}
+  // expected-note@-2 {{missing case: '.Twain(_, _)'}}
   case ContainsEnum.Possible<Int>.Naught,
        .Naught:
     ()
@@ -265,10 +268,8 @@ case +++(_, var d, 3):
 // expected-error@-1{{'+++' is not a prefix unary operator}}
   ()
 case (_, var e, 3) +++ (1, 2, 3):
-// expected-error@-1{{binary operator '+++' cannot be applied to operands of type '(_, <<error type>>, Int)' and '(Int, Int, Int)'}}
-// expected-note@-2{{expected an argument list of type '((Int, Int, Int), (Int, Int, Int))'}}
-// expected-error@-3{{'var' binding pattern cannot appear in an expression}}
-// expected-error@-4{{'var' binding pattern cannot appear in an expression}}
+// expected-error@-1{{'_' can only appear in a pattern}}
+// expected-error@-2{{'var' binding pattern cannot appear in an expression}}
   ()
 }
 

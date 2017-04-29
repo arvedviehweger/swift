@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 infix operator +++
 
@@ -169,7 +169,7 @@ class MyArrayBuffer<Element>: r22409190ManagedBuffer<UInt, Element> {
 // <rdar://problem/22459135> error: 'print' is unavailable: Please wrap your tuple argument in parentheses: 'print((...))'
 func r22459135() {
   func h<S : Sequence>(_ sequence: S) -> S.Iterator.Element
-    where S.Iterator.Element : Integer {
+    where S.Iterator.Element : FixedWidthInteger {
     return 0
   }
 
@@ -205,7 +205,7 @@ var _ : Int = R24267414.foo() // expected-error {{generic parameter 'T' could no
 
 
 // https://bugs.swift.org/browse/SR-599
-func SR599<T: Integer>() -> T.Type { return T.self }  // expected-note {{in call to function 'SR599'}}
+func SR599<T: FixedWidthInteger>() -> T.Type { return T.self }  // expected-note {{in call to function 'SR599'}}
 _ = SR599()         // expected-error {{generic parameter 'T' could not be inferred}}
 
 
@@ -225,16 +225,16 @@ func test9215114<T: P19215114, U: Q19215114>(_ t: T) -> (U) -> () {
 }
 
 // <rdar://problem/21718970> QoI: [uninferred generic param] cannot invoke 'foo' with an argument list of type '(Int)'
-class Whatever<A: IntegerArithmetic, B: IntegerArithmetic> {  // expected-note 2 {{'A' declared as parameter to type 'Whatever'}}
+class Whatever<A: Numeric, B: Numeric> {  // expected-note 2 {{'A' declared as parameter to type 'Whatever'}}
   static func foo(a: B) {}
   
   static func bar() {}
 
 }
-Whatever.foo(a: 23) // expected-error {{generic parameter 'A' could not be inferred}} expected-note {{explicitly specify the generic arguments to fix this issue}} {{9-9=<<#A: IntegerArithmetic#>, <#B: IntegerArithmetic#>>}}
+Whatever.foo(a: 23) // expected-error {{generic parameter 'A' could not be inferred}} expected-note {{explicitly specify the generic arguments to fix this issue}} {{9-9=<<#A: Numeric#>, <#B: Numeric#>>}}
 
 // <rdar://problem/21718955> Swift useless error: cannot invoke 'foo' with no arguments
-Whatever.bar()  // expected-error {{generic parameter 'A' could not be inferred}} expected-note {{explicitly specify the generic arguments to fix this issue}} {{9-9=<<#A: IntegerArithmetic#>, <#B: IntegerArithmetic#>>}}
+Whatever.bar()  // expected-error {{generic parameter 'A' could not be inferred}} expected-note {{explicitly specify the generic arguments to fix this issue}} {{9-9=<<#A: Numeric#>, <#B: Numeric#>>}}
 
 // <rdar://problem/27515965> Type checker doesn't enforce same-type constraint if associated type is Any
 protocol P27515965 {
@@ -404,4 +404,42 @@ func testFixItNested() {
 // rdar://problem/26845038
 func occursCheck26845038(a: [Int]) {
   _ = Array(a)[0]
+}
+
+// rdar://problem/29633747
+extension Array where Element: Hashable {
+    public func trimmed(_ elements: [Element]) -> SubSequence {
+        return []
+    }
+}
+
+func rdar29633747(characters: String.CharacterView) {
+  let _ = Array(characters).trimmed(["("])
+}
+
+// Null pointer dereference in noteArchetypeSource()
+class GenericClass<A> {}
+// expected-note@-1 {{'A' declared as parameter to type 'GenericClass'}}
+
+func genericFunc<T>(t: T) {
+  _ = [T: GenericClass] // expected-error {{generic parameter 'A' could not be inferred}}
+  // expected-note@-1 {{explicitly specify the generic arguments to fix this issue}}
+  // expected-error@-2 2 {{type 'T' does not conform to protocol 'Hashable'}}
+}
+
+struct SR_3525<T> {}
+func sr3525_arg_int(_: inout SR_3525<Int>) {}
+func sr3525_arg_gen<T>(_: inout SR_3525<T>) {}
+func sr3525_1(t: SR_3525<Int>) {
+  let _ = sr3525_arg_int(&t) // expected-error {{cannot pass immutable value as inout argument: 't' is a 'let' constant}}
+}
+func sr3525_2(t: SR_3525<Int>) {
+  let _ = sr3525_arg_gen(&t) // expected-error {{cannot pass immutable value as inout argument: 't' is a 'let' constant}}
+}
+func sr3525_3<T>(t: SR_3525<T>) {
+  let _ = sr3525_arg_gen(&t) // expected-error {{cannot pass immutable value as inout argument: 't' is a 'let' constant}}
+}
+
+class testStdlibType {
+  let _: Array // expected-error {{reference to generic type 'Array' requires arguments in <...>}} {{15-15=<Any>}}
 }

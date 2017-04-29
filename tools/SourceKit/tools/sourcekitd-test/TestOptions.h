@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -50,6 +50,8 @@ enum class SourceKitRequest {
   PrintDiags,
   ExtractComment,
   ModuleGroups,
+  NameTranslation,
+  MarkupToXML,
 };
 
 struct TestOptions {
@@ -75,6 +77,9 @@ struct TestOptions {
   llvm::SmallVector<std::string, 4> RequestOptions;
   llvm::ArrayRef<const char *> CompilerArgs;
   std::string USR;
+  std::string SwiftName;
+  std::string ObjCName;
+  std::string ObjCSelector;
   bool CheckInterfaceIsASCII = false;
   bool UsedSema = false;
   bool PrintRequest = true;
@@ -82,8 +87,10 @@ struct TestOptions {
   bool PrintRawResponse = false;
   bool SimplifiedDemangling = false;
   bool SynthesizedExtensions = false;
+  bool CollectActionables = false;
   bool isAsyncRequest = false;
   bool parseArgs(llvm::ArrayRef<const char *> Args);
+  void printHelp(bool ShowHidden) const;
 };
 
 }

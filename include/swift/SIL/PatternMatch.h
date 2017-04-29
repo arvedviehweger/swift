@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -364,9 +364,12 @@ UNARY_OP_MATCH_WITH_ARG_MATCHER(SuperMethodInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(DynamicMethodInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialRefInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialOpaqueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialAddrInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialOpaqueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialRefInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(DeinitExistentialAddrInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(DeinitExistentialOpaqueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ProjectBlockStorageInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongRetainInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongReleaseInst)

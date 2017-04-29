@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -18,14 +18,16 @@
 #ifndef SWIFT_BASIC_DIAGNOSTICENGINE_H
 #define SWIFT_BASIC_DIAGNOSTICENGINE_H
 
+#include "swift/AST/Attr.h"
 #include "swift/AST/TypeLoc.h"
 #include "swift/AST/DeclNameLoc.h"
-#include "swift/Basic/DiagnosticConsumer.h"
+#include "swift/AST/DiagnosticConsumer.h"
 
 namespace swift {
   class Decl;
   class DiagnosticEngine;
   class SourceManager;
+  class ValueDecl;
   
   enum class PatternKind : uint8_t;
   enum class StaticSpellingKind : uint8_t;
@@ -70,6 +72,7 @@ namespace swift {
     Unsigned,
     Identifier,
     ObjCSelector,
+    ValueDecl,
     Type,
     TypeRepr,
     PatternKind,
@@ -77,6 +80,7 @@ namespace swift {
     DescriptiveDeclKind,
     DeclAttribute,
     VersionTuple,
+    LayoutConstraint,
   };
 
   namespace diag {
@@ -95,6 +99,7 @@ namespace swift {
       StringRef StringVal;
       DeclName IdentifierVal;
       ObjCSelector ObjCSelectorVal;
+      ValueDecl *TheValueDecl;
       Type TypeVal;
       TypeRepr *TyR;
       PatternKind PatternKindVal;
@@ -102,6 +107,7 @@ namespace swift {
       DescriptiveDeclKind DescriptiveDeclKindVal;
       const DeclAttribute *DeclAttributeVal;
       clang::VersionTuple VersionVal;
+      LayoutConstraint LayoutConstraintVal;
     };
     
   public:
@@ -127,6 +133,10 @@ namespace swift {
 
     DiagnosticArgument(ObjCSelector S)
       : Kind(DiagnosticArgumentKind::ObjCSelector), ObjCSelectorVal(S) {
+    }
+
+    DiagnosticArgument(ValueDecl *VD)
+      : Kind(DiagnosticArgumentKind::ValueDecl), TheValueDecl(VD) {
     }
 
     DiagnosticArgument(Type T)
@@ -166,6 +176,9 @@ namespace swift {
       : Kind(DiagnosticArgumentKind::VersionTuple),
         VersionVal(version) { }
 
+    DiagnosticArgument(LayoutConstraint L)
+      : Kind(DiagnosticArgumentKind::LayoutConstraint), LayoutConstraintVal(L) {
+    }
     /// Initializes a diagnostic argument using the underlying type of the
     /// given enum.
     template<
@@ -202,6 +215,11 @@ namespace swift {
       return ObjCSelectorVal;
     }
 
+    ValueDecl *getAsValueDecl() const {
+      assert(Kind == DiagnosticArgumentKind::ValueDecl);
+      return TheValueDecl;
+    }
+
     Type getAsType() const {
       assert(Kind == DiagnosticArgumentKind::Type);
       return TypeVal;
@@ -236,6 +254,28 @@ namespace swift {
       assert(Kind == DiagnosticArgumentKind::VersionTuple);
       return VersionVal;
     }
+
+    LayoutConstraint getAsLayoutConstraint() const {
+      assert(Kind == DiagnosticArgumentKind::LayoutConstraint);
+      return LayoutConstraintVal;
+    }
+  };
+  
+  struct DiagnosticFormatOptions {
+    const std::string OpeningQuotationMark;
+    const std::string ClosingQuotationMark;
+    const std::string AKAFormatString;
+
+    DiagnosticFormatOptions(std::string OpeningQuotationMark,
+                            std::string ClosingQuotationMark,
+                            std::string AKAFormatString)
+        : OpeningQuotationMark(OpeningQuotationMark),
+          ClosingQuotationMark(ClosingQuotationMark),
+          AKAFormatString(AKAFormatString) {}
+
+    DiagnosticFormatOptions()
+        : OpeningQuotationMark("'"), ClosingQuotationMark("'"),
+          AKAFormatString("'%1$s' (aka '%2$s')") {}
   };
   
   /// Diagnostic - This is a specific instance of a diagnostic along with all of
@@ -701,6 +741,13 @@ namespace swift {
     /// \returns true if diagnostic is marked with PointsToFirstBadToken
     /// option.
     bool isDiagnosticPointsToFirstBadToken(DiagID id) const;
+    
+    /// \brief Format the given diagnostic text and place the result in the given
+    /// buffer.
+    static void formatDiagnosticText(
+        llvm::raw_ostream &Out, StringRef InText,
+        ArrayRef<DiagnosticArgument> FormatArgs,
+        DiagnosticFormatOptions FormatOpts = DiagnosticFormatOptions());
 
   private:
     /// \brief Flush the active diagnostic.

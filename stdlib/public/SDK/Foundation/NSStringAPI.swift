@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,6 +13,8 @@
 // Exposing the API of NSString on Swift's String
 //
 //===----------------------------------------------------------------------===//
+
+@_exported import Foundation // Clang module
 
 // Open Issues
 // ===========
@@ -391,11 +393,7 @@ extension String {
   /// Returns an array containing substrings from the `String`
   /// that have been divided by characters in a given set.
   public func components(separatedBy separator: CharacterSet) -> [String] {
-    // FIXME: two steps due to <rdar://16971181>
-    let nsa = _ns.components(separatedBy: separator) as NSArray
-    // Since this function is effectively a bridge thunk, use the
-    // bridge thunk semantics for the NSArray conversion
-    return nsa as! [String]
+    return _ns.components(separatedBy: separator)
   }
 
 
@@ -404,10 +402,7 @@ extension String {
   /// Returns an array containing substrings from the `String`
   /// that have been divided by a given separator.
   public func components(separatedBy separator: String) -> [String] {
-    let nsa = _ns.components(separatedBy: separator) as NSArray
-    // Since this function is effectively a bridge thunk, use the
-    // bridge thunk semantics for the NSArray conversion
-    return nsa as! [String]
+    return _ns.components(separatedBy: separator)
   }
 
   // - (const char *)cStringUsingEncoding:(NSStringEncoding)encoding
@@ -468,7 +463,7 @@ extension String {
 
   /// Enumerates all the lines in a string.
   public func enumerateLines(
-    invoking body: @escaping (_ line: String, _ stop: inout Bool) -> ()
+    invoking body: @escaping (_ line: String, _ stop: inout Bool) -> Void
   ) {
     _ns.enumerateLines {
       (line: String, stop: UnsafeMutablePointer<ObjCBool>)
@@ -501,7 +496,7 @@ extension String {
     options opts: NSLinguisticTagger.Options = [],
     orthography: NSOrthography? = nil,
     invoking body:
-      (String, Range<Index>, Range<Index>, inout Bool) -> ()
+      (String, Range<Index>, Range<Index>, inout Bool) -> Void
   ) {
     _ns.enumerateLinguisticTags(
       in: _toNSRange(range),
@@ -536,7 +531,7 @@ extension String {
     _ body: @escaping (
       _ substring: String?, _ substringRange: Range<Index>,
       _ enclosingRange: Range<Index>, inout Bool
-    ) -> ()
+    ) -> Void
   ) {
     _ns.enumerateSubstrings(in: _toNSRange(range), options: opts) {
       var stop_ = false
@@ -621,7 +616,7 @@ extension String {
     return _withOptionalOutParameter(leftover) {
       self._ns.getBytes(
         &buffer,
-        maxLength: min(buffer.count, maxBufferCount),
+        maxLength: Swift.min(buffer.count, maxBufferCount),
         usedLength: usedBufferCount,
         encoding: encoding.rawValue,
         options: options,
@@ -641,7 +636,8 @@ extension String {
   public func getCString(
     _ buffer: inout [CChar], maxLength: Int, encoding: Encoding
   ) -> Bool {
-    return _ns.getCString(&buffer, maxLength: min(buffer.count, maxLength),
+    return _ns.getCString(&buffer,
+                          maxLength: Swift.min(buffer.count, maxLength),
                           encoding: encoding.rawValue)
   }
 
@@ -657,7 +653,7 @@ extension String {
   public func getFileSystemRepresentation(
     _ buffer: inout [CChar], maxLength: Int) -> Bool {
     return _ns.getFileSystemRepresentation(
-      &buffer, maxLength: min(buffer.count, maxLength))
+      &buffer, maxLength: Swift.min(buffer.count, maxLength))
   }
 
   // - (void)
@@ -1147,8 +1143,7 @@ extension String {
   /// values found in the `String`.
   public
   func propertyListFromStringsFileFormat() -> [String : String] {
-    return _ns.propertyListFromStringsFileFormat()! as [NSObject : AnyObject]
-      as! [String : String]
+    return _ns.propertyListFromStringsFileFormat() as! [String : String]? ?? [:]
   }
 
   // - (NSRange)rangeOfCharacterFromSet:(NSCharacterSet *)aSet
@@ -1737,7 +1732,7 @@ extension String {
     options opts: NSLinguisticTagger.Options,
     orthography: NSOrthography?,
     _ body:
-      (String, Range<Index>, Range<Index>, inout Bool) -> ()
+      (String, Range<Index>, Range<Index>, inout Bool) -> Void
   ) {
     fatalError("unavailable function can't be called")
   }
@@ -1749,7 +1744,7 @@ extension String {
     _ body: (
       _ substring: String?, _ substringRange: Range<Index>,
       _ enclosingRange: Range<Index>, inout Bool
-    ) -> ()
+    ) -> Void
   ) {
     fatalError("unavailable function can't be called")
   }

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -33,6 +33,14 @@ namespace llvm {
 namespace SourceKit {
   class UIdent;
 }
+
+bool sourcekitd_variant_dictionary_apply_impl(
+    sourcekitd_variant_t dict,
+    llvm::function_ref<bool(sourcekitd_uid_t, sourcekitd_variant_t)> applier);
+
+bool sourcekitd_variant_array_apply_impl(
+    sourcekitd_variant_t array,
+    llvm::function_ref<bool(size_t, sourcekitd_variant_t)> applier);
 
 namespace sourcekitd {
 
@@ -138,8 +146,7 @@ public:
 
 void initialize();
 void shutdown();
-void set_interrupted_connection_handler(
-                           sourcekitd_interrupted_connection_handler_t handler);
+void set_interrupted_connection_handler(llvm::function_ref<void()> handler);
 
 typedef std::function<void(sourcekitd_response_t)> ResponseReceiver;
 
@@ -187,7 +194,9 @@ static inline sourcekitd_variant_t makeUIDVariant(sourcekitd_uid_t value) {
 /// sourcekitd_variant_t contains a pointer to such a structure.
 struct VariantFunctions {
   sourcekitd_variant_type_t (*get_type)(sourcekitd_variant_t obj);
-  bool (*array_apply)(sourcekitd_variant_t array, sourcekitd_variant_array_applier_t applier);
+  bool (*array_apply)(
+      sourcekitd_variant_t array,
+      llvm::function_ref<bool(size_t, sourcekitd_variant_t)> applier);
   bool (*array_get_bool)(sourcekitd_variant_t array, size_t index);
   size_t (*array_get_count)(sourcekitd_variant_t array);
   int64_t (*array_get_int64)(sourcekitd_variant_t array, size_t index);
@@ -195,7 +204,9 @@ struct VariantFunctions {
   sourcekitd_uid_t (*array_get_uid)(sourcekitd_variant_t array, size_t index);
   sourcekitd_variant_t (*array_get_value)(sourcekitd_variant_t array, size_t index);
   bool (*bool_get_value)(sourcekitd_variant_t obj);
-  bool (*dictionary_apply)(sourcekitd_variant_t dict, sourcekitd_variant_dictionary_applier_t applier);
+  bool (*dictionary_apply)(
+      sourcekitd_variant_t dict,
+      llvm::function_ref<bool(sourcekitd_uid_t, sourcekitd_variant_t)> applier);
   bool (*dictionary_get_bool)(sourcekitd_variant_t dict, sourcekitd_uid_t key);
   int64_t (*dictionary_get_int64)(sourcekitd_variant_t dict, sourcekitd_uid_t key);
   const char *(*dictionary_get_string)(sourcekitd_variant_t dict, sourcekitd_uid_t key);

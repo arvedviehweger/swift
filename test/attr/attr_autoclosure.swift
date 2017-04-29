@@ -1,7 +1,4 @@
-// RUN: %target-parse-verify-swift
-// RUN: not %target-swift-frontend -parse %s 2>&1 | %FileCheck %s
-// No errors at invalid locations!
-// CHECK-NOT: <unknown>:0:
+// RUN: %target-typecheck-verify-swift
 
 // Simple case.
 var fn : @autoclosure () -> Int = 4  // expected-error {{@autoclosure may only be used on parameters}}  expected-error {{cannot convert value of type 'Int' to specified type '() -> Int'}}
@@ -43,10 +40,10 @@ class DerivedClass {
 }
 
 protocol P1 {
-  associatedtype Element
+  associatedtype Element // expected-note{{declared here}}
 }
 protocol P2 : P1 {
-  associatedtype Element
+  associatedtype Element // expected-warning{{redeclaration of associated type 'Element'}}
 }
 
 func overloadedEach<O: P1>(_ source: O, _ closure: @escaping () -> ()) {

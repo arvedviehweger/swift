@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -87,19 +87,13 @@ public protocol BidirectionalCollection
   associatedtype SubSequence : _BidirectionalIndexable, Collection
     = BidirectionalSlice<Self>
   // FIXME(ABI)#93 (Recursive Protocol Constraints):
-  // FIXME(ABI)#94 (Associated Types with where clauses):
-  // This is dependent on both recursive protocol constraints AND associated 
-  // types with where clauses.
   // associatedtype SubSequence : BidirectionalCollection
 
-  /// A type that can represent the indices that are valid for subscripting the
+  /// A type that represents the indices that are valid for subscripting the
   /// collection, in ascending order.
   associatedtype Indices : _BidirectionalIndexable, Collection
     = DefaultBidirectionalIndices<Self>
   // FIXME(ABI)#95 (Recursive Protocol Constraints):
-  // FIXME(ABI)#96 (Associated Types with where clauses):
-  // This is dependent on both recursive protocol constraints AND associated 
-  // types with where clauses.
   // associatedtype Indices : BidirectionalCollection
 
   /// The indices that are valid for subscripting the collection, in ascending
@@ -227,10 +221,10 @@ extension BidirectionalCollection where SubSequence == BidirectionalSlice<Self> 
 
 extension BidirectionalCollection where SubSequence == Self {
   /// Removes and returns the last element of the collection.
-  /// 
-  /// Use `popLast()` to remove the last element of a collection that might be empty.
   ///
-  /// The `removeLast()` method must be used only on a nonempty collection.
+  /// You can use `popLast()` to remove the last element of a collection that
+  /// might be empty. The `removeLast()` method must be used only on a
+  /// nonempty collection.
   ///
   /// - Returns: The last element of the collection if the collection has one
   ///   or more elements; otherwise, `nil`.
@@ -246,10 +240,8 @@ extension BidirectionalCollection where SubSequence == Self {
 
   /// Removes and returns the last element of the collection.
   ///
-  /// The collection must not be empty.
-  ///
-  /// To remove the last element of a collection that might be empty, 
-  /// use the `popLast()` method instead.
+  /// The collection must not be empty. To remove the last element of a
+  /// collection that might be empty, use the `popLast()` method instead.
   ///
   /// - Returns: The last element of the collection.
   ///

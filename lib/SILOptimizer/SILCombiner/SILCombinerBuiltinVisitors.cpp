@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -55,8 +55,19 @@ SILInstruction *SILCombiner::optimizeBuiltinCompareEq(BuiltinInst *BI,
   IsZeroKind RHS = isZeroValue(BI->getArguments()[1]);
 
   // Can't handle unknown values.
-  if (LHS == IsZeroKind::Unknown || RHS == IsZeroKind::Unknown)
+  if (LHS == IsZeroKind::Unknown) {
     return nullptr;
+  }
+
+  // Canonicalize i1_const == X to X == i1_const.
+  // Canonicalize i1_const != X to X != i1_const.
+  if (RHS == IsZeroKind::Unknown) {
+    auto *CanonI =
+        Builder.createBuiltin(BI->getLoc(), BI->getName(), BI->getType(), {},
+                              {BI->getArguments()[1], BI->getArguments()[0]});
+    replaceInstUsesWith(*BI, CanonI);
+    return eraseInstFromFunction(*BI);
+  }
 
   // Can't handle non-zero ptr values.
   if (LHS == IsZeroKind::NotZero && RHS == IsZeroKind::NotZero)
@@ -87,11 +98,12 @@ SILInstruction *SILCombiner::optimizeBuiltinCanBeObjCClass(BuiltinInst *BI) {
   case TypeTraitResult::CanBe:
     return nullptr;
   }
+
+  llvm_unreachable("Unhandled TypeTraitResult in switch.");
 }
 
 static unsigned getTypeWidth(SILType Ty) {
-  if (auto BuiltinIntTy =
-          dyn_cast<BuiltinIntegerType>(Ty.getSwiftRValueType())) {
+  if (auto BuiltinIntTy = Ty.getAs<BuiltinIntegerType>()) {
     if (BuiltinIntTy->isFixedWidth()) {
       return BuiltinIntTy->getFixedWidth();
     }
@@ -287,7 +299,8 @@ static SILInstruction *createIndexAddrFrom(IndexRawPointerInst *I,
 
   // index_raw_pointer's address type is currently always strict.
   auto *NewPTAI = Builder.createPointerToAddress(
-    I->getLoc(), Ptr, InstanceType.getAddressType(), /*isStrict*/ true);
+    I->getLoc(), Ptr, InstanceType.getAddressType(),
+    /*isStrict*/ true, /*isInvariant*/ false);
 
   auto *DistanceAsWord =
       Builder.createBuiltin(I->getLoc(), TruncOrBitCast->getName(),
@@ -494,17 +507,15 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
       [](const APInt &i) -> bool { return false; }           /* isZero */,
       Builder, this);
   case BuiltinValueKind::DestroyArray: {
-    ArrayRef<Substitution> Substs = I->getSubstitutions();
+    SubstitutionList Substs = I->getSubstitutions();
     // Check if the element type is a trivial type.
     if (Substs.size() == 1) {
       Substitution Subst = Substs[0];
       Type ElemType = Subst.getReplacement();
-      if (ElemType->isCanonical() && ElemType->isLegalSILType()) {
-        SILType SILElemTy = SILType::getPrimitiveObjectType(CanType(ElemType));
-        // Destroying an array of trivial types is a no-op.
-        if (SILElemTy.isTrivial(I->getModule()))
-          return eraseInstFromFunction(*I);
-      }
+      auto &SILElemTy = I->getModule().Types.getTypeLowering(ElemType);
+      // Destroying an array of trivial types is a no-op.
+      if (SILElemTy.isTrivial())
+        return eraseInstFromFunction(*I);
     }
     break;
   }

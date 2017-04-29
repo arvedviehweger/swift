@@ -1,9 +1,11 @@
 <img src="https://swift.org/assets/images/swift.svg" alt="Swift logo" height="70" >
+
 # Swift Programming Language
 
-|| **Swift** | **Package** |
-|---|---|---|
+| | **Swift** | **Package** |
+|---|:---:|:---:|
 |**macOS**         |[![Build Status](https://ci.swift.org/job/oss-swift-incremental-RA-osx/badge/icon)](https://ci.swift.org/job/oss-swift-incremental-RA-osx)|[![Build Status](https://ci.swift.org/job/oss-swift-package-osx/badge/icon)](https://ci.swift.org/job/oss-swift-package-osx)|
+|**Ubuntu 14.04** |[![Build Status](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-14_04/badge/icon)](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-14_04)|[![Build Status](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-14_04/badge/icon)](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-14_04)|
 |**Ubuntu 16.04** |[![Build Status](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-16_04/badge/icon)](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-16_04)|[![Build Status](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-16_04/badge/icon)](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-16_04)|
 |**Ubuntu 16.10** |[![Build Status](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-16_10/badge/icon)](https://ci.swift.org/job/oss-swift-incremental-RA-linux-ubuntu-16_10)|[![Build Status](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-16_10/badge/icon)](https://ci.swift.org/job/oss-swift-package-linux-ubuntu-16_10)|
 
@@ -52,7 +54,7 @@ discussed below.
 macOS, Ubuntu Linux LTS, and the latest Ubuntu Linux release are the current
 supported host development operating systems.
 
-For macOS, you need [the latest Xcode](https://developer.apple.com/xcode/downloads/).
+For macOS, you need [Xcode 8.3.2](https://developer.apple.com/xcode/downloads/).
 
 For Ubuntu, you'll need the following development dependencies:
 
@@ -61,7 +63,7 @@ For Ubuntu, you'll need the following development dependencies:
 **Note:** LLDB currently requires at least `swig-1.3.40` but will successfully build
 with version 2 shipped with Ubuntu.
 
-Ubuntu 14.04 LTS is no longer supported. Unsupported build instructions for Ubuntu 14.04 LTS can be found [here](docs/Ubuntu14.md)
+Build instructions for Ubuntu 14.04 LTS can be found [here](docs/Ubuntu14.md)
 
 ### Getting Sources for Swift and Related Projects
 
@@ -88,7 +90,7 @@ uploading SSH keys to GitHub):
     ./swift/utils/update-checkout --clone-with-ssh
 
 #### CMake
-[CMake](http://cmake.org) is the core infrastructure used to configure builds of
+[CMake](https://cmake.org) is the core infrastructure used to configure builds of
 Swift and its companion projects; at least version 3.4.3 is required. Your
 favorite Linux distribution likely already has a CMake package you can install.
 On macOS, you can download the [CMake Binary Distribution](https://cmake.org/download),
@@ -118,7 +120,7 @@ it next to the other projects and it will be bootstrapped automatically:
 
 #### Install via third-party packaging tool (macOS only)
 
-**[Homebrew](http://brew.sh/)**
+**[Homebrew](https://brew.sh/)**
 
     brew install cmake ninja
 

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -26,11 +26,18 @@
 
 namespace swift {
 
-// For now, use malloc and free as our standard allocator for
-// metadata caches.  It might make sense in the future to take
-// advantage of the fact that we know that most allocations here
-// won't ever be deallocated.
-using MetadataAllocator = llvm::MallocAllocator;
+class MetadataAllocator : public llvm::AllocatorBase<MetadataAllocator> {
+public:
+  void Reset() {}
+
+  LLVM_ATTRIBUTE_RETURNS_NONNULL void *Allocate(size_t size, size_t alignment);
+  using AllocatorBase<MetadataAllocator>::Allocate;
+
+  void Deallocate(const void *Ptr, size_t size);
+  using AllocatorBase<MetadataAllocator>::Deallocate;
+
+  void PrintStats() const {}
+};
 
 /// A typedef for simple global caches.
 template <class EntryTy>
@@ -217,7 +224,7 @@ template <class ValueTy> class MetadataCache {
       return KeyDataRef::forArguments(getKeyDataBuffer(), KeyLength);
     }
 
-    long getKeyIntValueForDump() const {
+    intptr_t getKeyIntValueForDump() const {
       return Hash;
     }
 

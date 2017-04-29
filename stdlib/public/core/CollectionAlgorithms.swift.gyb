@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -32,6 +32,7 @@ extension BidirectionalCollection {
   ///         print(lastNumber)
   ///     }
   ///     // Prints "50"
+  @_inlineable
   public var last: Iterator.Element? {
     return isEmpty ? nil : self[index(before: endIndex)]
   }
@@ -62,6 +63,7 @@ extension Collection where ${IElement} : Equatable {
   ///   found in the collection, returns `nil`.
   ///
   /// - SeeAlso: `index(where:)`
+  @_inlineable
   public func index(of element: ${IElement}) -> Index? {
     if let result = _customIndexOfEquatableElement(element) {
       return result
@@ -101,6 +103,7 @@ extension Collection {
   ///   returns `nil`.
   ///
   /// - SeeAlso: `index(of:)`
+  @_inlineable
   public func index(
     where predicate: (${IElement}) throws -> Bool
   ) rethrows -> Index? {
@@ -143,6 +146,7 @@ orderingExplanation = """\
 //===----------------------------------------------------------------------===//
 
 extension MutableCollection {
+  @_inlineable
   public mutating func partition(
     by belongsInSecondPartition: (${IElement}) throws -> Bool
   ) rethrows -> Index {
@@ -171,6 +175,7 @@ extension MutableCollection {
 }
 
 extension MutableCollection where Self : BidirectionalCollection {
+  @_inlineable
   public mutating func partition(
     by belongsInSecondPartition: (${IElement}) throws -> Bool
   ) rethrows -> Index {
@@ -256,8 +261,8 @@ extension ${Self} where Self.Iterator.Element : Comparable {
   ///
   /// - Returns: A sorted array of the ${sequenceKind}'s elements.
   ///
-  /// - SeeAlso: `sorted(by:)`
-  /// ${'- MutatingVariant: sort' if Self == 'MutableCollection' else ''}
+  /// - SeeAlso: `sorted(by:)`, `sort()`
+  @_inlineable
   public func sorted() -> [Iterator.Element] {
     var result = ContiguousArray(self)
     result.sort()
@@ -330,14 +335,14 @@ ${orderingExplanation}
   ///   `false`.
   /// - Returns: A sorted array of the ${sequenceKind}'s elements.
   ///
-  /// - SeeAlso: `sorted()`
-  /// ${'- MutatingVariant: sort' if Self == 'MutableCollection' else ''}
+  /// - SeeAlso: `sorted()`, `sort(by:)`
+  @_inlineable
   public func sorted(
     by areInIncreasingOrder:
-      (${IElement}, ${IElement}) -> Bool
-  ) -> [Iterator.Element] {
+      (${IElement}, ${IElement}) throws -> Bool
+  ) rethrows -> [Iterator.Element] {
     var result = ContiguousArray(self)
-    result.sort(by: areInIncreasingOrder)
+    try result.sort(by: areInIncreasingOrder)
     return Array(result)
   }
 }
@@ -373,6 +378,7 @@ extension MutableCollection
   ///     students.sort(by: >)
   ///     print(students)
   ///     // Prints "["Peter", "Kweku", "Kofi", "Akosua", "Abena"]"
+  @_inlineable
   public mutating func sort() {
     let didSortUnsafeBuffer: Void? =
       _withUnsafeMutableBufferPointerIfSupported {
@@ -391,6 +397,9 @@ extension MutableCollection
 extension MutableCollection where Self : RandomAccessCollection {
   /// Sorts the collection in place, using the given predicate as the
   /// comparison between elements.
+  ///
+  /// This method can take throwing closure. If closure throws error while sorting,
+  /// order of elements may change. No elements will be lost.
   ///
   /// When you want to sort a collection of elements that doesn't conform to
   /// the `Comparable` protocol, pass a closure to this method that returns
@@ -443,28 +452,25 @@ ${orderingExplanation}
   /// - Parameter areInIncreasingOrder: A predicate that returns `true` if its first
   ///   argument should be ordered before its second argument; otherwise,
   ///   `false`.
+  @_inlineable
   public mutating func sort(
     by areInIncreasingOrder:
-      (${IElement}, ${IElement}) -> Bool
-  ) {
-    typealias EscapingBinaryPredicate =
-      (Iterator.Element, Iterator.Element) -> Bool
-    let escapableIsOrderedBefore =
-      unsafeBitCast(areInIncreasingOrder, to: EscapingBinaryPredicate.self)
+      (${IElement}, ${IElement}) throws -> Bool
+  ) rethrows {
 
     let didSortUnsafeBuffer: Void? =
-      _withUnsafeMutableBufferPointerIfSupported {
+      try _withUnsafeMutableBufferPointerIfSupported {
       (baseAddress, count) -> Void in
       var bufferPointer =
         UnsafeMutableBufferPointer(start: baseAddress, count: count)
-      bufferPointer.sort(by: escapableIsOrderedBefore)
+      try bufferPointer.sort(by: areInIncreasingOrder)
       return ()
     }
     if didSortUnsafeBuffer == nil {
-      _introSort(
+      try _introSort(
         &self,
         subRange: startIndex..<endIndex,
-        by: escapableIsOrderedBefore)
+        by: areInIncreasingOrder)
     }
   }
 }
@@ -505,11 +511,13 @@ subscriptCommentPost = """\
   /// - Parameter bounds: A range of the collection's indices. The bounds of
   ///   the range must be valid indices of the collection."""
 }%
+// FIXME(ABI)#180 (Type checker)
 // WORKAROUND rdar://25214066 - should be on Collection
 extension ${Self} {
 ${subscriptCommentPre}
 ${subscriptCommentMid}
 ${subscriptCommentPost}
+  @_inlineable
   public subscript(bounds: ClosedRange<Index>) -> SubSequence {
     get {
       return self[
@@ -532,11 +540,13 @@ ${subscriptCommentPost}
   }
 }
 
+// FIXME(ABI)#180 (Type checker)
 // WORKAROUND rdar://25214066 - should be on Collection
 extension ${Self} where Index : Strideable, Index.Stride : SignedInteger {
 ${subscriptCommentPre}
 ${subscriptCommentMid}
 ${subscriptCommentPost}
+  @_inlineable
   public subscript(bounds: CountableRange<Index>) -> SubSequence {
     get {
       return self[Range(bounds)]
@@ -551,6 +561,7 @@ ${subscriptCommentPost}
 ${subscriptCommentPre}
 ${subscriptCommentMid}
 ${subscriptCommentPost}
+  @_inlineable
   public subscript(bounds: CountableClosedRange<Index>) -> SubSequence {
     get {
       return self[ClosedRange(bounds)]

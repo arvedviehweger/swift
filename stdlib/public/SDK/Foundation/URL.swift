@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,22 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 @_exported import Foundation // Clang module
-
-/// Keys used in the result of `URLResourceValues.thumbnailDictionary`.
-@available(OSX 10.10, iOS 8.0, *)
-public struct URLThumbnailSizeKey : RawRepresentable, Hashable {
-    public typealias RawValue = String
-    
-    public init(rawValue: RawValue) { self.rawValue = rawValue }
-    private(set) public var rawValue: RawValue
-    
-    /// Key for a 1024 x 1024 thumbnail image.
-    static public let none: URLThumbnailSizeKey = URLThumbnailSizeKey(rawValue: URLThumbnailDictionaryItem.NSThumbnail1024x1024SizeKey.rawValue)
-  
-    public var hashValue: Int {
-        return rawValue.hashValue
-    }
-}
 
 /**
  URLs to file system resources support the properties defined below. Note that not all property values will exist for all file system URLs. For example, if a file is located on a volume that does not support creation dates, it is valid to request the creation date property, but the returned value will be nil, and no error will be generated.
@@ -288,20 +272,18 @@ public struct URLResourceValues {
     @available(OSX 10.10, *)
     public var quarantineProperties: [String : Any]? {
         get {
+            let value = _values[.quarantinePropertiesKey]
             // If a caller has caused us to stash NSNull in the dictionary (via set), make sure to return nil instead of NSNull
-            if let isNull = _values[.quarantinePropertiesKey] as? NSNull {
+            if value is NSNull {
                 return nil
             } else {
-                return _values[.quarantinePropertiesKey] as? [String : Any]
+                return value as? [String : Any]
             }
         }
         set {
-            if let v = newValue {
-                _set(.quarantinePropertiesKey, newValue: newValue as NSObject?)
-            } else {
-                // Set to NSNull, a special case for deleting quarantine properties
-                _set(.quarantinePropertiesKey, newValue: NSNull())
-            }
+            // Use NSNull for nil, a special case for deleting quarantine
+            // properties
+            _set(.quarantinePropertiesKey, newValue: newValue ?? NSNull())
         }
     }
 #endif

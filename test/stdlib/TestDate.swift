@@ -1,4 +1,4 @@
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -50,12 +50,6 @@ class TestDate : TestDateSuper {
         let d3 = d1
         d1 += 10
         expectTrue(d1 > d3)
-    }
-    
-    func testDateHash() {
-        let d0 = NSDate()
-        let d1 = Date(timeIntervalSinceReferenceDate: d0.timeIntervalSinceReferenceDate)
-        expectEqual(d0.hashValue, d1.hashValue)
     }
 
     func testCast() {
@@ -202,7 +196,6 @@ class TestDate : TestDateSuper {
 var DateTests = TestSuite("TestDate")
 DateTests.test("testDateComparison") { TestDate().testDateComparison() }
 DateTests.test("testDateMutation") { TestDate().testDateMutation() }
-DateTests.test("testDateHash") { TestDate().testDateHash() }
 DateTests.test("testCast") { TestDate().testCast() }
 DateTests.test("testDistantPast") { TestDate().testDistantPast() }
 DateTests.test("testDistantFuture") { TestDate().testDistantFuture() }

@@ -1,5 +1,5 @@
 // This source file is part of the Swift.org open source project
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -8,5 +8,5 @@
 // Test is no longer valid as there is no longer `map` as a free function in Swift 3
 // XFAIL: *
 // DUPLICATE-OF: 26813-generic-enum-tuple-optional-payload.swift
-// RUN: not --crash %target-swift-frontend %s -parse
+// RUN: not --crash %target-swift-frontend %s -typecheck
 let a{{map($0

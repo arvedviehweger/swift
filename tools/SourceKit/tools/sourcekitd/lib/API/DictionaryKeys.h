@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -29,6 +29,7 @@ extern SourceKit::UIdent KeySourceFile;
 extern SourceKit::UIdent KeySourceText;
 extern SourceKit::UIdent KeyModuleName;
 extern SourceKit::UIdent KeyGroupName;
+extern SourceKit::UIdent KeyActionName;
 extern SourceKit::UIdent KeySynthesizedExtension;
 extern SourceKit::UIdent KeyNotification;
 extern SourceKit::UIdent KeyKeyword;
@@ -39,6 +40,8 @@ extern SourceKit::UIdent KeyEnableSyntaxMap;
 extern SourceKit::UIdent KeyEnableDiagnostics;
 extern SourceKit::UIdent KeySyntacticOnly;
 extern SourceKit::UIdent KeyLength;
+extern SourceKit::UIdent KeyActionable;
+extern SourceKit::UIdent KeyParentLoc;
 extern SourceKit::UIdent KeyKind;
 extern SourceKit::UIdent KeyAccessibility;
 extern SourceKit::UIdent KeySetterAccessibility;
@@ -122,6 +125,13 @@ extern SourceKit::UIdent KeyContainerTypeUsr;
 extern SourceKit::UIdent KeyModuleGroups;
 
 extern SourceKit::UIdent KeyRangeContent;
+
+extern SourceKit::UIdent KeyBaseName;
+extern SourceKit::UIdent KeyArgNames;
+extern SourceKit::UIdent KeySelectorPieces;
+extern SourceKit::UIdent KeyNameKind;
+extern SourceKit::UIdent KeyLocalizationKey;
+
 /// \brief Used for determining the printing order of dictionary keys.
 bool compareDictKeys(SourceKit::UIdent LHS, SourceKit::UIdent RHS);
 

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -71,6 +71,7 @@ public func NSApplicationMain(
 }
 
 extension NSColor : _ExpressibleByColorLiteral {
+  @nonobjc
   public required convenience init(colorLiteralRed red: Float, green: Float,
                                    blue: Float, alpha: Float) {
     self.init(srgbRed: CGFloat(red), green: CGFloat(green),
@@ -85,6 +86,7 @@ extension NSImage : _ExpressibleByImageLiteral {
     self.init(named: name)
   }
 
+  @nonobjc
   public required convenience init(imageLiteralResourceName name: String) {
     self.init(failableImageLiteral: name)
   }

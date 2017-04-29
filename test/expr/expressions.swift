@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 //===----------------------------------------------------------------------===//
 // Tests and samples.
@@ -40,7 +40,7 @@ func basictest() {
 
   //var x6 : Float = 4+5
 
-  var x7 = 4; 5 // expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}}
+  var x7 = 4; 5 // expected-warning {{integer literal is unused}}
 
   // Test implicit conversion of integer literal to non-Int64 type.
   var x8 : Int8 = 4
@@ -79,6 +79,31 @@ func basictest() {
   bind_test2() // expected-error {{cannot call value of non-function type 'Int'}}{{13-15=}}
 }
 
+// <https://bugs.swift.org/browse/SR-3522>
+func testUnusedLiterals_SR3522() {
+  42 // expected-warning {{integer literal is unused}}
+  2.71828 // expected-warning {{floating-point literal is unused}}
+  true // expected-warning {{boolean literal is unused}}
+  false // expected-warning {{boolean literal is unused}}
+  "Hello" // expected-warning {{string literal is unused}}
+  "Hello \(42)" // expected-warning {{string literal is unused}}
+  #file // expected-warning {{#file literal is unused}}
+  (#line) // expected-warning {{#line literal is unused}}
+  #column // expected-warning {{#column literal is unused}}
+  #function // expected-warning {{#function literal is unused}}
+  #dsohandle // expected-warning {{#dsohandle literal is unused}}
+  __FILE__ // expected-error {{__FILE__ has been replaced with #file in Swift 3}} expected-warning {{#file literal is unused}}
+  __LINE__ // expected-error {{__LINE__ has been replaced with #line in Swift 3}} expected-warning {{#line literal is unused}}
+  __COLUMN__ // expected-error {{__COLUMN__ has been replaced with #column in Swift 3}} expected-warning {{#column literal is unused}}
+  __FUNCTION__ // expected-error {{__FUNCTION__ has been replaced with #function in Swift 3}} expected-warning {{#function literal is unused}}
+  __DSO_HANDLE__ // expected-error {{__DSO_HANDLE__ has been replaced with #dsohandle in Swift 3}} expected-warning {{#dsohandle literal is unused}}
+
+  nil // expected-error {{'nil' requires a contextual type}}
+  #fileLiteral(resourceName: "what.txt") // expected-error {{could not infer type of file reference literal}} expected-note * {{}}
+  #imageLiteral(resourceName: "hello.png") // expected-error {{could not infer type of image literal}} expected-note * {{}}
+  #colorLiteral(red: 1, green: 0, blue: 0, alpha: 1) // expected-error {{could not infer type of color literal}} expected-note * {{}}
+}
+
 // Infix operators and attribute lists.
 infix operator %% : MinPrecedence
 precedencegroup MinPrecedence {
@@ -113,9 +138,9 @@ func funcdecl7(_ a: Int, b: (c: Int, d: Int), third: (c: Int, d: Int)) -> Int {
 }
 
 // Error recovery.
-func testfunc2 (_: (((), Int)) -> Int) -> Int {}
+func testfunc2 (_: ((), Int) -> Int) -> Int {}
 func errorRecovery() {
-  testfunc2({ $0 + 1 }) // expected-error {{binary operator '+' cannot be applied to operands of type '((), Int)' and 'Int'}} expected-note {{expected an argument list of type '(Int, Int)'}}
+  testfunc2({ $0 + 1 }) // expected-error {{contextual closure type '((), Int) -> Int' expects 2 arguments, but 1 was used in closure body}}
 
   enum union1 {
     case bar
@@ -232,7 +257,7 @@ func test_lambda() {
 func test_lambda2() {
   { () -> protocol<Int> in
     // expected-warning @-1 {{'protocol<...>' composition syntax is deprecated and not needed here}} {{11-24=Int}}
-    // expected-error @-2 {{non-protocol type 'Int' cannot be used within a protocol composition}}
+    // expected-error @-2 {{non-protocol, non-class type 'Int' cannot be used within a protocol-constrained type}}
     // expected-warning @-3 {{result of call is unused}}
     return 1
   }()
@@ -431,7 +456,7 @@ func stringliterals(_ d: [String: Int]) {
 
   // rdar://11385385
   let x = 4
-  "Hello \(x+1) world"  // expected-warning {{expression of type 'String' is unused}}
+  "Hello \(x+1) world"  // expected-warning {{string literal is unused}}
   
   "Error: \(x+1"; // expected-error {{unterminated string literal}}
   
@@ -498,9 +523,9 @@ func testInOut(_ arg: inout Int) {
   takesExplicitInt(&x)
   takesInt(&x) // expected-error{{'&' used with non-inout argument of type 'Int'}}
   var y = &x // expected-error{{'&' can only appear immediately in a call argument list}} \
-             // expected-error {{type 'inout Int' of variable is not materializable}}
+             // expected-error {{variable has type 'inout Int' which includes nested inout parameters}}
   var z = &arg // expected-error{{'&' can only appear immediately in a call argument list}} \
-             // expected-error {{type 'inout Int' of variable is not materializable}}
+             // expected-error {{variable has type 'inout Int' which includes nested inout parameters}}
 
   takesExplicitInt(5) // expected-error {{cannot pass immutable value as inout argument: literals are not mutable}}
 }
@@ -645,13 +670,18 @@ func lvalue_processing() {
 
 struct Foo {
   func method() {}
+  mutating func mutatingMethod() {}
 }
 
 func test() {
   var x = Foo()
+  let y = Foo()
+
+  // FIXME: Bad diagnostics
 
   // rdar://15708430
-  (&x).method()  // expected-error {{'inout Foo' is not convertible to 'Foo'}}
+  (&x).method()  // expected-error {{type of expression is ambiguous without more context}}
+  (&x).mutatingMethod() // expected-error {{cannot use mutating member on immutable value of type 'inout Foo'}}
 }
 
 
@@ -753,12 +783,12 @@ func testOptionalTypeParsing(_ a : AnyObject) -> String {
 func testParenExprInTheWay() {
   let x = 42
   
-  if x & 4.0 {}  // expected-error {{binary operator '&' cannot be applied to operands of type 'Int' and 'Double'}} expected-note {{expected an argument list of type '(Int, Int)'}}
+  if x & 4.0 {}  // expected-error {{binary operator '&' cannot be applied to operands of type 'Int' and 'Double'}} expected-note {{expected an argument list of type '(Self, Self)'}}
 
-  if (x & 4.0) {}   // expected-error {{binary operator '&' cannot be applied to operands of type 'Int' and 'Double'}} expected-note {{expected an argument list of type '(Int, Int)'}}
+  if (x & 4.0) {}   // expected-error {{binary operator '&' cannot be applied to operands of type 'Int' and 'Double'}} expected-note {{expected an argument list of type '(Self, Self)'}}
 
   if !(x & 4.0) {}  // expected-error {{binary operator '&' cannot be applied to operands of type 'Int' and 'Double'}}
-  //expected-note @-1 {{expected an argument list of type '(Int, Int)'}}
+  //expected-note @-1 {{expected an argument list of type '(Self, Self)'}}
 
   
   if x & x {} // expected-error {{'Int' is not convertible to 'Bool'}}
@@ -780,7 +810,7 @@ func inoutTests(_ arr: inout Int) {
   (true ? &x : &y)  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
   // expected-warning @-1 {{expression of type 'inout Int' is unused}}
   let a = (true ? &x : &y)  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
-  // expected-error @-1 {{type 'inout Int' of variable is not materializable}}
+  // expected-error @-1 {{variable has type 'inout Int' which includes nested inout parameters}}
 
   inoutTests(true ? &x : &y);  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
 
@@ -790,7 +820,7 @@ func inoutTests(_ arr: inout Int) {
   inoutTests(&x)
   
   // <rdar://problem/17489894> inout not rejected as operand to assignment operator
-  &x += y  // expected-error {{'&' can only appear immediately in a call argument list}}
+  &x += y  // expected-error {{'&' can only appear immediately in a call argument list}}}
 
   // <rdar://problem/23249098>
   func takeAny(_ x: Any) {}
@@ -842,25 +872,6 @@ func r22913570() {
 }
 
 
-// <rdar://problem/23708702> Emit deprecation warnings for ++/-- in Swift 2.2
-func swift22_deprecation_increment_decrement() {
-  var i = 0
-  var f = 1.0
-
-  i++     // expected-error {{'++' is unavailable}} {{4-6= += 1}}
-  --i     // expected-error {{'--' is unavailable}} {{3-5=}} {{6-6= -= 1}}
-  _ = i++ // expected-error {{'++' is unavailable}}
-
-  ++f     // expected-error {{'++' is unavailable}} {{3-5=}} {{6-6= += 1}}
-  f--     // expected-error {{'--' is unavailable}} {{4-6= -= 1}}
-  _ = f-- // expected-error {{'--' is unavailable}} {{none}}
-
-  // <rdar://problem/24530312> Swift ++fix-it produces bad code in nested expressions
-  // This should not get a fixit hint.
-  var j = 2
-  i = ++j   // expected-error {{'++' is unavailable}} {{none}}
-}
-
 // SR-628 mixing lvalues and rvalues in tuple expression
 var x = 0
 var y = 1
@@ -891,4 +902,25 @@ func se0101<P: Pse0101>(x: Cse0101<P>) {
   _ = alignof(Cse0101<P>.T.self) // expected-error {{'alignof' is unavailable: use MemoryLayout<T>.alignment instead.}} {{7-15=MemoryLayout<}} {{27-33=>.alignment}} {{none}}
   _ = strideof(P.Type.self) // expected-error {{'strideof' is unavailable: use MemoryLayout<T>.stride instead.}} {{7-16=MemoryLayout<}} {{22-28=>.stride}} {{none}}
   _ = sizeof(type(of: x)) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-26=MemoryLayout<Cse0101<P>>.size}} {{none}}
+}
+
+// SR-3439 subscript with pound exprssions.
+Sr3439: do {
+  class B {
+    init() {}
+    subscript(x: Int) -> Int { return x }
+    subscript(x: String) -> String { return x }
+
+    func foo() {
+      _ = self[#line] // Ok.
+    }
+  }
+  class C : B {
+    func bar() {
+      _ = super[#file] // Ok.
+    }
+  }
+
+  let obj = C();
+  _ = obj[#column] // Ok.
 }

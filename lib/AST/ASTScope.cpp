@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -18,14 +18,17 @@
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/Expr.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/Pattern.h"
 #include "swift/AST/Stmt.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/TypeRepr.h"
 #include "swift/Basic/STLExtras.h"
+#include "llvm/Support/Compiler.h"
 #include <algorithm>
+
 using namespace swift;
 
 const ASTScope *ASTScope::getActiveContinuation() const {
@@ -37,6 +40,8 @@ const ASTScope *ASTScope::getActiveContinuation() const {
   case ContinuationKind::ActiveThenSourceFile:
     return continuation.getPointer();
   }
+
+  llvm_unreachable("Unhandled ContinuationKind in switch.");
 }
 
 const ASTScope *ASTScope::getHistoricalContinuation() const {
@@ -48,6 +53,8 @@ const ASTScope *ASTScope::getHistoricalContinuation() const {
   case ContinuationKind::ActiveThenSourceFile:
     return getSourceFileScope();
   }
+
+  llvm_unreachable("Unhandled ContinuationKind in switch.");
 }
 
 void ASTScope::addActiveContinuation(const ASTScope *newContinuation) const {
@@ -177,6 +184,8 @@ static bool hasAccessors(AbstractStorageDecl *asd) {
   case AbstractStorageDecl::StoredWithTrivialAccessors:
     return false;
   }
+
+  llvm_unreachable("Unhandled ContinuationKind in switch.");
 }
 
 /// Determine whether this is a top-level code declaration that isn't just
@@ -200,7 +209,6 @@ static bool isRealTopLevelCodeDecl(Decl *decl) {
 void ASTScope::expand() const {
   assert(!isExpanded() && "Already expanded the children of this node");
   ASTContext &ctx = getASTContext();
-  SourceManager &sourceMgr = ctx.SourceMgr;
 
 #ifndef NDEBUG
   auto verificationError = [&]() -> llvm::raw_ostream& {
@@ -228,6 +236,7 @@ void ASTScope::expand() const {
 
 #ifndef NDEBUG
     // Check invariants in asserting builds.
+    SourceManager &sourceMgr = ctx.SourceMgr;
 
     // Check for containment of the child within the parent.
     if (!sourceMgr.rangeContains(getSourceRange(), child->getSourceRange())) {
@@ -865,14 +874,11 @@ ASTScope *ASTScope::createIfNeeded(const ASTScope *parent, Decl *decl) {
   if (decl->isImplicit()) return nullptr;
 
   // Accessors are always nested within their abstract storage declaration.
-  bool isAccessor = false;
   if (auto func = dyn_cast<FuncDecl>(decl)) {
-    if (func->isAccessor()) {
-      isAccessor = true;
-      if (!parentDirectDescendedFromAbstractStorageDecl(
-             parent, func->getAccessorStorageDecl()))
-        return nullptr;
-    }
+    if (func->isAccessor() &&
+        !parentDirectDescendedFromAbstractStorageDecl(
+            parent, func->getAccessorStorageDecl()))
+      return nullptr;
   }
 
   ASTContext &ctx = decl->getASTContext();
@@ -948,7 +954,7 @@ ASTScope *ASTScope::createIfNeeded(const ASTScope *parent, Decl *decl) {
 
   case DeclKind::Protocol:
     cast<ProtocolDecl>(decl)->createGenericParamsIfMissing();
-    SWIFT_FALLTHROUGH;
+    LLVM_FALLTHROUGH;
 
   case DeclKind::Class:
   case DeclKind::Enum:
@@ -1077,6 +1083,8 @@ ASTScope *ASTScope::createIfNeeded(const ASTScope *parent, Decl *decl) {
     return nullptr;
   }
   }
+
+  llvm_unreachable("Unhandled DeclKind in switch.");
 }
 
 ASTScope *ASTScope::createIfNeeded(const ASTScope *parent, Stmt *stmt) {
@@ -1150,6 +1158,8 @@ ASTScope *ASTScope::createIfNeeded(const ASTScope *parent, Stmt *stmt) {
     // Nothing to do for these statements.
     return nullptr;
   }
+
+  llvm_unreachable("Unhandled StmtKind in switch.");
 }
 
 /// Find all of the (non-nested) closures referenced within this expression.
@@ -1164,7 +1174,7 @@ static SmallVector<ClosureExpr *, 4> findClosures(Expr *expr) {
   public:
     ClosureFinder(SmallVectorImpl<ClosureExpr *> &closures) : closures(closures) { }
 
-    virtual std::pair<bool, Expr *> walkToExprPre(Expr *E) override {
+    std::pair<bool, Expr *> walkToExprPre(Expr *E) override {
       if (auto closure = dyn_cast<ClosureExpr>(E)) {
         closures.push_back(closure);
         return { false, E };
@@ -1173,21 +1183,21 @@ static SmallVector<ClosureExpr *, 4> findClosures(Expr *expr) {
       return { true, E };
     }
 
-    virtual std::pair<bool, Stmt *> walkToStmtPre(Stmt *S) override {
+    std::pair<bool, Stmt *> walkToStmtPre(Stmt *S) override {
       return { false, S };
     }
 
-    virtual std::pair<bool, Pattern*> walkToPatternPre(Pattern *P) override {
+    std::pair<bool, Pattern*> walkToPatternPre(Pattern *P) override {
       return { false, P };
     }
 
-    virtual bool walkToDeclPre(Decl *D) override { return false; }
+    bool walkToDeclPre(Decl *D) override { return false; }
 
-    virtual bool walkToTypeLocPre(TypeLoc &TL) override { return false; }
+    bool walkToTypeLocPre(TypeLoc &TL) override { return false; }
 
-    virtual bool walkToTypeReprPre(TypeRepr *T) override { return false; }
+    bool walkToTypeReprPre(TypeRepr *T) override { return false; }
 
-    virtual bool walkToParameterListPre(ParameterList *PL) override {
+    bool walkToParameterListPre(ParameterList *PL) override {
       return false;
     }
   };
@@ -1275,6 +1285,8 @@ bool ASTScope::canStealContinuation() const {
     // Guard conditions steal continuations.
     return conditionalClause.isGuardContinuation;
   }
+
+  llvm_unreachable("Unhandled ASTScopeKind in switch.");
 }
 
 void ASTScope::enumerateContinuationScopes(
@@ -1384,6 +1396,8 @@ ASTContext &ASTScope::getASTContext() const {
   case ASTScopeKind::TopLevelCode:
     return static_cast<Decl *>(topLevelCode)->getASTContext();
   }
+
+  llvm_unreachable("Unhandled ASTScopeKind in switch.");
 }
 
 const ASTScope *ASTScope::getSourceFileScope() const {
@@ -1662,6 +1676,8 @@ SourceRange ASTScope::getSourceRangeImpl() const {
   case ASTScopeKind::TopLevelCode:
     return topLevelCode->getSourceRange();
   }
+
+  llvm_unreachable("Unhandled ASTScopeKind in switch.");
 }
 
 /// Find the innermost enclosing scope that contains this source location.
@@ -1772,6 +1788,8 @@ DeclContext *ASTScope::getDeclContext() const {
   case ASTScopeKind::AbstractFunctionBody:
     return nullptr;
   }
+
+  llvm_unreachable("Unhandled ASTScopeKind in switch.");
 }
 
 DeclContext *ASTScope::getInnermostEnclosingDeclContext() const {

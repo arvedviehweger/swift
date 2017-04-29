@@ -1,5 +1,5 @@
-// RUN: %swift %clang-importer-sdk -target x86_64-apple-macosx10.51 -parse %s -verify
-// RUN: %swift %clang-importer-sdk -target x86_64-apple-macosx10.52 -parse %s -verify
+// RUN: %swift %clang-importer-sdk -target x86_64-apple-macosx10.51 -typecheck %s -verify
+// RUN: %swift %clang-importer-sdk -target x86_64-apple-macosx10.52 -typecheck %s -verify
 
 // REQUIRES: OS=macosx
 import Foundation
@@ -14,7 +14,7 @@ let calendarUnitsDep: NSCalendarUnitDeprecated = [.eraCalendarUnitDeprecated, .y
 // rdar://problem/21081557
 func pokeRawValue(_ random: SomeRandomEnum) {
   switch (random) {
-  case SomeRandomEnum.RawValue // expected-error{{expression pattern of type 'SomeRandomEnum.RawValue.Type' (aka 'Int.Type') cannot match values of type 'SomeRandomEnum'}}
+  case SomeRandomEnum.RawValue // expected-error{{type 'SomeRandomEnum' has no member 'RawValue'}}
     // expected-error@-1{{expected ':' after 'case'}}
   }
 }

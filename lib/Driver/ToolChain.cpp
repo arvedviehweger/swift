@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -30,8 +30,6 @@
 using namespace swift;
 using namespace swift::driver;
 using namespace llvm::opt;
-
-const char * const ToolChain::SWIFT_EXECUTABLE_NAME;
 
 ToolChain::JobContext::JobContext(Compilation &C,
                                   ArrayRef<const Job *> Inputs,
@@ -85,12 +83,17 @@ ToolChain::constructJob(const JobAction &JA,
     CASE(ModuleWrapJob)
     CASE(LinkJob)
     CASE(GenerateDSYMJob)
+    CASE(VerifyDebugInfoJob)
+    CASE(GeneratePCHJob)
     CASE(AutolinkExtractJob)
     CASE(REPLJob)
 #undef CASE
     case Action::Input:
       llvm_unreachable("not a JobAction");
     }
+
+    // Work around MSVC warning: not all control paths return a value
+    llvm_unreachable("All switch cases are covered");
   }();
 
   // Special-case the Swift frontend.

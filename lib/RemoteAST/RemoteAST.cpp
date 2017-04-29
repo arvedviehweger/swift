@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,12 +16,15 @@
 
 #include "swift/RemoteAST/RemoteAST.h"
 #include "swift/Remote/MetadataReader.h"
+#include "swift/Strings.h"
 #include "swift/Subsystems.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/NameLookup.h"
 #include "swift/AST/Types.h"
+#include "swift/AST/TypeRepr.h"
+#include "swift/Basic/Mangler.h"
 #include "swift/ClangImporter/ClangImporter.h"
 
 // TODO: Develop a proper interface for this.
@@ -122,7 +125,8 @@ public:
   }
 
   NominalTypeDecl *createNominalTypeDecl(StringRef mangledName) {
-    auto node = Demangle::demangleTypeAsNode(mangledName);
+    Demangle::Demangler Dem;
+    Demangle::NodePointer node = Dem.demangleType(mangledName);
     if (!node) return nullptr;
 
     return createNominalTypeDecl(node);
@@ -319,7 +323,9 @@ public:
       if (!protocol->is<ProtocolType>())
         return Type();
     }
-    return ProtocolCompositionType::get(Ctx, protocols);
+    return ProtocolCompositionType::get(Ctx, protocols,
+                                        // FIXME
+                                        /*HasExplicitAnyObject=*/false);
   }
 
   Type createExistentialMetatypeType(Type instance) {
@@ -474,7 +480,7 @@ private:
     }
   };
 };
-}
+} // end anonymous namespace
 
 NominalTypeDecl *
 RemoteASTTypeBuilder::createNominalTypeDecl(const Demangle::NodePointer &node) {
@@ -516,7 +522,8 @@ bool RemoteASTTypeBuilder::isForeignModule(const Demangle::NodePointer &node) {
   if (node->getKind() != Demangle::Node::Kind::Module)
     return false;
 
-  return (node->getText() == "__ObjC");
+  return (node->getText() == MANGLING_MODULE_OBJC ||
+          node->getText() == MANGLING_MODULE_CLANG_IMPORTER);
 }
 
 DeclContext *
@@ -665,11 +672,13 @@ public:
   virtual ~RemoteASTContextImpl() = default;
 
   virtual Result<Type>
-  getTypeForRemoteTypeMetadata(RemoteAddress metadata) = 0;
+  getTypeForRemoteTypeMetadata(RemoteAddress metadata, bool skipArtificial) = 0;
   virtual Result<MetadataKind>
   getKindForRemoteTypeMetadata(RemoteAddress metadata) = 0;
   virtual Result<NominalTypeDecl*>
   getDeclForRemoteNominalTypeDescriptor(RemoteAddress descriptor) = 0;
+  virtual Result<RemoteAddress>
+  getHeapMetadataForObject(RemoteAddress object) = 0;
 
   Result<uint64_t>
   getOffsetOfMember(Type type, RemoteAddress optMetadata, StringRef memberName){
@@ -699,6 +708,11 @@ protected:
     return getBuilder().getFailureAsResult<T>(Failure::Unknown);
   }
 
+  template <class T, class KindTy, class... ArgTys>
+  Result<T> fail(KindTy kind, ArgTys &&...args) {
+    return Result<T>::emplaceFailure(kind, std::forward<ArgTys>(args)...);
+  }
+
 private:
   virtual RemoteASTTypeBuilder &getBuilder() = 0;
   virtual MemoryReader &getReader() = 0;
@@ -714,11 +728,6 @@ private:
   IRGenContext *getIRGen() {
     if (!IRGen) IRGen = createIRGenContext();
     return IRGen.get();
-  }
-
-  template <class T, class KindTy, class... ArgTys>
-  Result<T> fail(KindTy kind, ArgTys &&...args) {
-    return Result<T>::emplaceFailure(kind, std::forward<ArgTys>(args)...);
   }
 
   Result<uint64_t>
@@ -970,8 +979,10 @@ public:
                                ASTContext &ctx)
     : Reader(std::move(reader), ctx) {}
 
-  Result<Type> getTypeForRemoteTypeMetadata(RemoteAddress metadata) override {
-    if (auto result = Reader.readTypeFromMetadata(metadata.getAddressData()))
+  Result<Type> getTypeForRemoteTypeMetadata(RemoteAddress metadata,
+                                            bool skipArtificial) override {
+    if (auto result = Reader.readTypeFromMetadata(metadata.getAddressData(),
+                                                  skipArtificial))
       return result;
     return getFailure<Type>();
   }
@@ -1013,6 +1024,13 @@ public:
     return fail<uint64_t>(Failure::Unimplemented,
                           "look up field offset by name");
   }
+
+  Result<RemoteAddress>
+  getHeapMetadataForObject(RemoteAddress object) override {
+    auto result = Reader.readMetadataFromInstance(object.getAddressData());
+    if (result.first) return RemoteAddress(result.second);
+    return getFailure<RemoteAddress>();
+  }
 };
 
 } // end anonymous namespace
@@ -1045,8 +1063,9 @@ RemoteASTContext::~RemoteASTContext() {
 }
 
 Result<Type>
-RemoteASTContext::getTypeForRemoteTypeMetadata(RemoteAddress address) {
-  return asImpl(Impl)->getTypeForRemoteTypeMetadata(address);
+RemoteASTContext::getTypeForRemoteTypeMetadata(RemoteAddress address,
+                                               bool skipArtificial) {
+  return asImpl(Impl)->getTypeForRemoteTypeMetadata(address, skipArtificial);
 }
 
 Result<MetadataKind>
@@ -1063,4 +1082,9 @@ Result<uint64_t>
 RemoteASTContext::getOffsetOfMember(Type type, RemoteAddress optMetadata,
                                     StringRef memberName) {
   return asImpl(Impl)->getOffsetOfMember(type, optMetadata, memberName);
+}
+
+Result<remote::RemoteAddress>
+RemoteASTContext::getHeapMetadataForObject(remote::RemoteAddress address) {
+  return asImpl(Impl)->getHeapMetadataForObject(address);
 }

@@ -179,7 +179,7 @@ __attribute__((availability(ios,introduced=8.0)))
 @end
 
 @interface NSValue (NSRange)
-+ (NSValue *)valueWithRange:(NSRange)range;
+- (NSValue *)valueWithRange:(NSRange)range;
 @property NSRange rangeValue;
 @end
 
@@ -225,7 +225,7 @@ typedef __INT32_TYPE__ int32_t;
 + (nullable instancetype)stringWithPath:(NSString*)path encoding:(int)encoding;
 @end
 
-NSString *NSStringToNSString(NSString *str);
+__attribute__((warn_unused_result)) NSString *NSStringToNSString(NSString *str);
 
 @interface Bee : NSObject
 -(void)buzz;
@@ -255,7 +255,11 @@ NSString *NSStringToNSString(NSString *str);
 @end
 
 @interface NSURL : NSObject
+- (instancetype)URLWithString:(NSString *)URLString;
 + (instancetype)URLWithString:(NSString *)URLString;
+- (BOOL)getResourceValue:(out id _Nullable *)value
+                  forKey:(NSString *)key
+                   error:(out NSError *_Nullable *)error;
 @end
 
 @interface NSAttributedString : NSString
@@ -378,6 +382,15 @@ typedef NS_ENUM(unsigned char, NSAliasesEnum) {
   NSAliasesByEquivalentValue = -127,
   NSAliasesByName = NSAliasesOriginal,
   NSAliasesDifferentValue = 2
+};
+
+typedef NS_ENUM(unsigned char, NSUnavailableAliasesEnum) {
+  NSUnavailableAliasesOriginalAU = 0,
+  NSUnavailableAliasesAliasAU __attribute__((unavailable)) = 0,
+  NSUnavailableAliasesOriginalUA __attribute__((unavailable)) = 1,
+  NSUnavailableAliasesAliasUA = 1,
+  NSUnavailableAliasesOriginalUU __attribute__((unavailable)) = 2,
+  NSUnavailableAliasesAliasUU __attribute__((unavailable)) = 2,
 };
 
 NS_ENUM(NSInteger, NSMalformedEnumMissingTypedef) {
@@ -710,6 +723,7 @@ typedef NS_OPTIONS(NSUInteger, NSExplicitlyUnavailableOnOSXOptions) {
 @end
 
 @interface NSURLRequest : NSObject
+- (instancetype)requestWithString:(NSString *)URLString;
 + (instancetype)requestWithString:(NSString *)URLString;
 + (instancetype)URLRequestWithURL:(NSURL *)URL;
 @end
@@ -928,7 +942,7 @@ __attribute__((availability(macosx,introduced=10.52)))
 - (nonnull NSString *)stringByAppendingString:(nonnull NSString *)string;
 - (nonnull NSString *)stringWithString:(nonnull NSString *)string;
 - (nullable NSURL *)URLWithAddedString:(nonnull NSString *)string;
-+ (NSString *)stringForCalendarUnits:(NSCalendarUnit)units;
+- (NSString *)stringForCalendarUnits:(NSCalendarUnit)units;
 @end
 
 @interface NSURL (Properties)
@@ -1072,3 +1086,17 @@ typedef enum __attribute__((ns_error_domain(FictionalServerErrorDomain))) Fictio
   FictionalServerErrorMeltedDown = 1
 } FictionalServerErrorCode;
 
+@protocol Garment
+@end
+
+@protocol Cotton
+@end
+
+@interface Coat
+@end
+
+@protocol NSLaundry
+- (void)wash:(Coat <Garment> * _Nonnull)garment;
+- (void)bleach:(Coat <Garment, Cotton> * _Nonnull)garment;
+- (Coat <Garment> * _Nonnull)dry;
+@end

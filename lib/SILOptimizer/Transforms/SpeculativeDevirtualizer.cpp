@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,8 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "sil-speculative-devirtualizer"
-#include "swift/Basic/DemangleWrappers.h"
-#include "swift/Basic/Fallthrough.h"
+
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SIL/SILFunction.h"
@@ -38,6 +37,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/CommandLine.h"
+
 using namespace swift;
 
 // This is the limit for the number of subclasses (jump targets) that the
@@ -95,6 +95,9 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   if (!canDevirtualizeClassMethod(AI, SubType))
     return FullApplySite();
 
+  if (SubType.getSwiftRValueType()->hasDynamicSelfType())
+    return FullApplySite();
+
   // Create a diamond shaped control flow and a checked_cast_branch
   // instruction that checks the exact type of the object.
   // This cast selects between two paths: one that calls the slow dynamic
@@ -107,7 +110,7 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   SILBasicBlock *Iden = F->createBasicBlock();
   // Virt is the block containing the slow virtual call.
   SILBasicBlock *Virt = F->createBasicBlock();
-  Iden->createArgument(SubType);
+  Iden->createPHIArgument(SubType, ValueOwnershipKind::Owned);
 
   SILBasicBlock *Continue = Entry->split(It);
 
@@ -139,15 +142,16 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
       (next == Continue->end()) ? nullptr : dyn_cast<StrongReleaseInst>(next);
   if (Release && Release->getOperand() == CMI->getOperand()) {
     VirtBuilder.createStrongRelease(Release->getLoc(), CMI->getOperand(),
-                                    Atomicity::Atomic);
+                                    Release->getAtomicity());
     IdenBuilder.createStrongRelease(Release->getLoc(), DownCastedClassInstance,
-                                    Atomicity::Atomic);
+                                    Release->getAtomicity());
     Release->eraseFromParent();
   }
 
   // Create a PHInode for returning the return value from both apply
   // instructions.
-  SILArgument *Arg = Continue->createArgument(AI.getType());
+  SILArgument *Arg =
+      Continue->createPHIArgument(AI.getType(), ValueOwnershipKind::Owned);
   if (!isa<TryApplyInst>(AI)) {
     IdenBuilder.createBranch(AI.getLoc(), Continue,
                              ArrayRef<SILValue>(IdenAI.getInstruction()));
@@ -181,13 +185,15 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   // Split critical edges resulting from VirtAI.
   if (auto *TAI = dyn_cast<TryApplyInst>(VirtAI)) {
     auto *ErrorBB = TAI->getFunction()->createBasicBlock();
-    ErrorBB->createArgument(TAI->getErrorBB()->getArgument(0)->getType());
+    ErrorBB->createPHIArgument(TAI->getErrorBB()->getArgument(0)->getType(),
+                               ValueOwnershipKind::Owned);
     Builder.setInsertionPoint(ErrorBB);
     Builder.createBranch(TAI->getLoc(), TAI->getErrorBB(),
                          {ErrorBB->getArgument(0)});
 
     auto *NormalBB = TAI->getFunction()->createBasicBlock();
-    NormalBB->createArgument(TAI->getNormalBB()->getArgument(0)->getType());
+    NormalBB->createPHIArgument(TAI->getNormalBB()->getArgument(0)->getType(),
+                                ValueOwnershipKind::Owned);
     Builder.setInsertionPoint(NormalBB);
     Builder.createBranch(TAI->getLoc(), TAI->getNormalBB(),
                          {NormalBB->getArgument(0)});
@@ -322,6 +328,17 @@ static bool tryToSpeculateTarget(FullApplySite AI,
   if (CMI->isVolatile())
     return false;
 
+  // Don't devirtualize withUnsafeGuaranteed 'self' as this would prevent
+  // retain/release removal.
+  //   unmanged._withUnsafeGuaranteedRef { $0.method() }
+  if (auto *TupleExtract = dyn_cast<TupleExtractInst>(CMI->getOperand()))
+    if (auto *UnsafeGuaranteedSelf =
+            dyn_cast<BuiltinInst>(TupleExtract->getOperand()))
+      if (UnsafeGuaranteedSelf->getBuiltinKind() ==
+              BuiltinValueKind::UnsafeGuaranteed &&
+          TupleExtract->getFieldNo() == 0)
+        return false;
+
   // Strip any upcasts off of our 'self' value, potentially leaving us
   // with a value whose type is closer (in the class hierarchy) to the
   // actual dynamic type.
@@ -331,7 +348,7 @@ static bool tryToSpeculateTarget(FullApplySite AI,
   // Bail if any generic types parameters of the class instance type are
   // unbound.
   // We cannot devirtualize unbound generic calls yet.
-  if (SubType.getSwiftRValueType()->hasArchetype())
+  if (SubType.hasArchetype())
     return false;
 
   auto &M = CMI->getModule();
@@ -375,12 +392,12 @@ static bool tryToSpeculateTarget(FullApplySite AI,
   SmallVector<ClassDecl *, 8> Subs(DirectSubs);
   Subs.append(IndirectSubs.begin(), IndirectSubs.end());
 
-  if (isa<BoundGenericClassType>(ClassType.getSwiftRValueType())) {
+  if (ClassType.is<BoundGenericClassType>()) {
     // Filter out any subclasses that do not inherit from this
     // specific bound class.
     auto RemovedIt = std::remove_if(Subs.begin(),
         Subs.end(),
-        [&ClassType, &M](ClassDecl *Sub){
+        [&ClassType](ClassDecl *Sub){
           auto SubCanTy = Sub->getDeclaredType()->getCanonicalType();
           // Unbound generic type can override a method from
           // a bound generic class, but this unbound generic
@@ -482,7 +499,7 @@ static bool tryToSpeculateTarget(FullApplySite AI,
     if (auto EMT = SubType.getAs<AnyMetatypeType>()) {
       auto InstTy = ClassType.getSwiftRValueType();
       auto *MetaTy = MetatypeType::get(InstTy, EMT->getRepresentation());
-      auto CanMetaTy = CanMetatypeType::CanTypeWrapper(MetaTy);
+      auto CanMetaTy = CanMetatypeType(MetaTy);
       ClassOrMetatypeType = SILType::getPrimitiveObjectType(CanMetaTy);
     }
 
@@ -534,7 +551,7 @@ namespace {
   /// class is at the bottom of the class hierarchy.
   class SpeculativeDevirtualization : public SILFunctionTransform {
   public:
-    virtual ~SpeculativeDevirtualization() {}
+    ~SpeculativeDevirtualization() override {}
 
     void run() override {
       ClassHierarchyAnalysis *CHA = PM->getAnalysis<ClassHierarchyAnalysis>();
@@ -560,7 +577,6 @@ namespace {
       }
     }
 
-    StringRef getName() override { return "Speculative Devirtualization"; }
   };
 
 } // end anonymous namespace

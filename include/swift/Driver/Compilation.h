@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,9 +21,10 @@
 #include "swift/Driver/Util.h"
 #include "swift/Basic/ArrayRefView.h"
 #include "swift/Basic/LLVM.h"
+#include "swift/Basic/Statistic.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/TimeValue.h"
+#include "llvm/Support/Chrono.h"
 
 #include <memory>
 #include <vector>
@@ -41,6 +42,7 @@ namespace swift {
 namespace driver {
   class Driver;
   class ToolChain;
+  class PerformJobsState;
 
 /// An enum providing different levels of output which should be produced
 /// by a Compilation.
@@ -56,6 +58,7 @@ enum class OutputLevel {
 };
 
 class Compilation {
+  friend class PerformJobsState;
 private:
   /// The DiagnosticEngine to which this Compilation should emit diagnostics.
   DiagnosticEngine &Diags;
@@ -99,12 +102,12 @@ private:
   ///
   /// This should be as close as possible to when the driver was invoked, since
   /// it's used as a lower bound.
-  llvm::sys::TimeValue BuildStartTime;
+  llvm::sys::TimePoint<> BuildStartTime;
 
   /// The time of the last build.
   ///
   /// If unknown, this will be some time in the past.
-  llvm::sys::TimeValue LastBuildTime = llvm::sys::TimeValue::MinTime();
+  llvm::sys::TimePoint<> LastBuildTime = llvm::sys::TimePoint<>::min();
 
   /// The number of commands which this compilation should attempt to run in
   /// parallel.
@@ -132,9 +135,20 @@ private:
   /// execute.
   bool ShowDriverTimeCompilation;
 
+  /// When non-null, record various high-level counters to this.
+  std::unique_ptr<UnifiedStatsReporter> Stats;
+
   /// When true, dumps information about why files are being scheduled to be
   /// rebuilt.
   bool ShowIncrementalBuildDecisions = false;
+
+  /// When true, traces the lifecycle of each driver job. Provides finer
+  /// detail than ShowIncrementalBuildDecisions.
+  bool ShowJobLifecycle = false;
+
+  /// When true, some frontend job has requested permission to pass
+  /// -emit-loaded-module-trace, so no other job needs to do it.
+  bool PassedEmitLoadedModuleTraceToFrontendJob = false;
 
   static const Job *unwrap(const std::unique_ptr<const Job> &p) {
     return p.get();
@@ -145,12 +159,13 @@ public:
               std::unique_ptr<llvm::opt::InputArgList> InputArgs,
               std::unique_ptr<llvm::opt::DerivedArgList> TranslatedArgs,
               InputFileList InputsWithTypes,
-              StringRef ArgsHash, llvm::sys::TimeValue StartTime,
+              StringRef ArgsHash, llvm::sys::TimePoint<> StartTime,
               unsigned NumberOfParallelCommands = 1,
               bool EnableIncrementalBuild = false,
               bool SkipTaskExecution = false,
               bool SaveTemps = false,
-              bool ShowDriverTimeCompilation = false);
+              bool ShowDriverTimeCompilation = false,
+              std::unique_ptr<UnifiedStatsReporter> Stats = nullptr);
   ~Compilation();
 
   ArrayRefView<std::unique_ptr<const Job>, const Job *, Compilation::unwrap>
@@ -194,12 +209,16 @@ public:
     ShowIncrementalBuildDecisions = value;
   }
 
+  void setShowJobLifecycle(bool value = true) {
+    ShowJobLifecycle = value;
+  }
+
   void setCompilationRecordPath(StringRef path) {
     assert(CompilationRecordPath.empty() && "already set");
     CompilationRecordPath = path;
   }
 
-  void setLastBuildTime(llvm::sys::TimeValue time) {
+  void setLastBuildTime(llvm::sys::TimePoint<> time) {
     LastBuildTime = time;
   }
 
@@ -216,6 +235,22 @@ public:
   /// \returns result code for the Compilation's Jobs; 0 indicates success and
   /// -2 indicates that one of the Compilation's Jobs crashed during execution
   int performJobs();
+
+  /// Returns whether the callee is permitted to pass -emit-loaded-module-trace
+  /// to a frontend job.
+  ///
+  /// This only returns true once, because only one job should pass that
+  /// argument.
+  bool requestPermissionForFrontendToEmitLoadedModuleTrace() {
+    if (PassedEmitLoadedModuleTraceToFrontendJob)
+      // Someone else has already done it!
+      return false;
+    else {
+      // We're the first and only (to execute this path).
+      PassedEmitLoadedModuleTraceToFrontendJob = true;
+      return true;
+    }
+  }
 
 private:
   /// \brief Perform all jobs.

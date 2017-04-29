@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -295,7 +295,7 @@ class RetainCodeMotionContext : public CodeMotionContext {
   llvm::SmallDenseMap<SILBasicBlock *, RetainBlockState *> BlockStates;
 
   /// Return true if the instruction blocks the Ptr to be moved further.
-  bool mayBlockCodeMotion(SILInstruction *II, SILValue Ptr) {
+  bool mayBlockCodeMotion(SILInstruction *II, SILValue Ptr) override {
     // NOTE: If more checks are to be added, place the most expensive in the
     // end, this function is called many times.
     //
@@ -337,35 +337,35 @@ public:
   }
 
   /// virtual destructor.
-  virtual ~RetainCodeMotionContext() {}
+  ~RetainCodeMotionContext() override {}
 
   /// Return true if we do not need optimistic data flow.
-  bool requireIteration();
+  bool requireIteration() override;
 
   /// Initialize necessary things to run the iterative data flow.
-  void initializeCodeMotionDataFlow();
+  void initializeCodeMotionDataFlow() override;
 
   /// Initialize the basic block maximum refcounted set.
-  void initializeCodeMotionBBMaxSet();
+  void initializeCodeMotionBBMaxSet() override;
 
   /// Compute the genset and killset for every root in every basic block.
-  void computeCodeMotionGenKillSet();
+  void computeCodeMotionGenKillSet() override;
 
   /// Run the iterative data flow to converge.
-  void convergeCodeMotionDataFlow(); 
+  void convergeCodeMotionDataFlow() override;
 
   /// Use the data flow results, come up with places to insert the new inst.
-  void computeCodeMotionInsertPoints();
+  void computeCodeMotionInsertPoints() override;
 
   /// Remove the old retains and create the new *moved* refcounted instructions
-  bool performCodeMotion();
+  bool performCodeMotion() override;
 
   /// Compute the BBSetIn and BBSetOut for the current basic block with the
   /// generated gen and kill set.
-  bool processBBWithGenKillSet(SILBasicBlock *BB);
+  bool processBBWithGenKillSet(SILBasicBlock *BB) override;
 
   /// Merge the data flow states.
-  void mergeBBDataFlowStates(SILBasicBlock *BB);
+  void mergeBBDataFlowStates(SILBasicBlock *BB) override;
 };
 
 bool RetainCodeMotionContext::requireIteration() {
@@ -375,7 +375,7 @@ bool RetainCodeMotionContext::requireIteration() {
   // genset and killset.
   llvm::SmallPtrSet<SILBasicBlock *, 4> PBBs;
   for (SILBasicBlock *B : PO->getReversePostOrder()) {
-    for (auto X : B->getPreds()) {
+    for (auto X : B->getPredecessorBlocks()) {
       if (!PBBs.count(X))
         return true;
     }
@@ -563,7 +563,7 @@ void RetainCodeMotionContext::computeCodeMotionInsertPoints() {
     for (unsigned i = 0; i < RCRootVault.size(); ++i) {
       if (S->BBSetIn[i])
         continue;
-      for (auto Pred : BB->getPreds()) {
+      for (auto Pred : BB->getPredecessorBlocks()) {
         BlockState *PBB = BlockStates[Pred];
         if (!PBB->BBSetOut[i])
           continue;
@@ -644,7 +644,7 @@ class ReleaseCodeMotionContext : public CodeMotionContext {
   ConsumedArgToEpilogueReleaseMatcher &ERM;
 
   /// Return true if the instruction blocks the Ptr to be moved further.
-  bool mayBlockCodeMotion(SILInstruction *II, SILValue Ptr) {
+  bool mayBlockCodeMotion(SILInstruction *II, SILValue Ptr) override {
     // NOTE: If more checks are to be added, place the most expensive in the end.
     // This function is called many times.
     //
@@ -687,35 +687,35 @@ public:
   } 
 
   /// virtual destructor.
-  virtual ~ReleaseCodeMotionContext() {}
+  ~ReleaseCodeMotionContext() override {}
 
   /// Return true if the data flow can converge in 1 iteration.
-  bool requireIteration(); 
+  bool requireIteration() override;
 
   /// Initialize necessary things to run the iterative data flow.
-  void initializeCodeMotionDataFlow();
+  void initializeCodeMotionDataFlow() override;
 
   /// Initialize the basic block maximum refcounted set.
-  void initializeCodeMotionBBMaxSet();
+  void initializeCodeMotionBBMaxSet() override;
 
   /// Compute the genset and killset for every root in every basic block.
-  void computeCodeMotionGenKillSet();
+  void computeCodeMotionGenKillSet() override;
 
   /// Run the iterative data flow to converge.
-  void convergeCodeMotionDataFlow(); 
+  void convergeCodeMotionDataFlow() override;
 
   /// Use the data flow results, come up with places to insert the new inst.
-  void computeCodeMotionInsertPoints();
+  void computeCodeMotionInsertPoints() override;
 
   /// Remove the old retains and create the new *moved* refcounted instructions
-  bool performCodeMotion();
+  bool performCodeMotion() override;
 
   /// Compute the BBSetIn and BBSetOut for the current basic
   /// block with the generated gen and kill set.
-  bool processBBWithGenKillSet(SILBasicBlock *BB);
+  bool processBBWithGenKillSet(SILBasicBlock *BB) override;
 
   /// Merge the data flow states.
-  void mergeBBDataFlowStates(SILBasicBlock *BB);
+  void mergeBBDataFlowStates(SILBasicBlock *BB) override;
 };
 
 bool ReleaseCodeMotionContext::requireIteration() {
@@ -906,7 +906,7 @@ void ReleaseCodeMotionContext::convergeCodeMotionDataFlow() {
     SILBasicBlock *BB = WorkList.pop_back_val();
     HandledBBs.erase(BB);
     if (processBBWithGenKillSet(BB)) {
-      for (auto X : BB->getPreds()) {
+      for (auto X : BB->getPredecessorBlocks()) {
         // We do not push basic block into the worklist if its already 
         // in the worklist.
         if (HandledBBs.count(X))
@@ -1018,8 +1018,6 @@ class ARCCodeMotion : public SILFunctionTransform {
   bool FreezeEpilogueReleases;
 
 public:
-  StringRef getName() override { return "SIL ARC Code Motion"; }
-
   /// Constructor.
   ARCCodeMotion(CodeMotionKind H, bool F) : Kind(H), FreezeEpilogueReleases(F) {}
 
@@ -1055,7 +1053,9 @@ public:
     if (Kind == Release) {
       // TODO: we should consider Throw block as well, or better we should
       // abstract the Return block or Throw block away in the matcher.
-      ConsumedArgToEpilogueReleaseMatcher ERM(RCFI, F, 
+      SILArgumentConvention Conv[] = {SILArgumentConvention::Direct_Owned};
+      ConsumedArgToEpilogueReleaseMatcher ERM(RCFI, F,
+            Conv,
             ConsumedArgToEpilogueReleaseMatcher::ExitKind::Return);
 
       ReleaseCodeMotionContext RelCM(BPA, F, PO, AA, RCFI, 

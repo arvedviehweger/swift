@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,18 +21,23 @@
 #include "llvm/IR/InlineAsm.h"
 
 #include "clang/AST/ASTContext.h"
+#include "clang/Basic/CharInfo.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 
 #include "swift/AST/Decl.h"
 #include "swift/AST/IRGenOptions.h"
-#include "swift/ClangImporter/ClangImporter.h"
 #include "swift/AST/Types.h"
+#include "swift/ClangImporter/ClangImporter.h"
+#include "swift/Demangling/ManglingMacros.h"
+#include "swift/IRGen/Linking.h"
 #include "swift/SIL/SILModule.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
 
 #include "CallEmission.h"
+#include "ConstantBuilder.h"
 #include "Explosion.h"
+#include "GenCall.h"
 #include "GenClass.h"
 #include "GenFunc.h"
 #include "GenHeap.h"
@@ -43,7 +48,7 @@
 #include "IRGenDebugInfo.h"
 #include "IRGenFunction.h"
 #include "IRGenModule.h"
-#include "Linking.h"
+#include "NativeConventionSchema.h"
 #include "ScalarTypeInfo.h"
 #include "StructLayout.h"
 
@@ -218,7 +223,7 @@ namespace {
       return ReferenceCounting::ObjC;
     }
   };
-}
+} // end anonymous namespace
 
 const LoadableTypeInfo *TypeConverter::convertBuiltinUnknownObject() {
   return new ObjCTypeInfo(IGM.ObjCPtrTy, IGM.getPointerSize(),
@@ -271,7 +276,7 @@ namespace {
       IGF.Builder.CreateStore(llvm::ConstantInt::get(IGF.IGM.SizeTy, 0), dest);
     }
   };
-}
+} // end anonymous namespace
 
 
 const LoadableTypeInfo *TypeConverter::convertBuiltinBridgeObject() {
@@ -360,8 +365,9 @@ llvm::Constant *IRGenModule::getAddrOfObjCSelectorRef(StringRef selector) {
 /// ObjC runtime requires protocol references to be loaded from an
 /// indirect variable, the address of which is given by
 /// getAddrOfObjCProtocolRef.
-llvm::Constant *IRGenModule::getAddrOfObjCProtocolRecord(ProtocolDecl *proto,
-                                               ForDefinition_t forDefinition) {
+llvm::Constant *
+IRGenModule::getAddrOfObjCProtocolRecord(ProtocolDecl *proto,
+                                         ForDefinition_t forDefinition) {
   return const_cast<llvm::Constant*>
     (cast<llvm::Constant>(getObjCProtocolGlobalVars(proto).record));
 }
@@ -568,12 +574,12 @@ namespace {
       if (!text.startswith(prefix)) return false;
       if (text.size() == prefix.size()) return true;
       assert(text.size() > prefix.size());
-      return !islower(text[prefix.size()]);
+      return !clang::isLowercase(text[prefix.size()]);
     }
 
 #undef FOREACH_FAMILY
   };
-}
+} // end anonymous namespace
 
 static void emitSuperArgument(IRGenFunction &IGF, bool isInstanceMethod,
                               llvm::Value *selfValue,
@@ -640,7 +646,7 @@ CallEmission irgen::prepareObjCMethodRootCall(IRGenFunction &IGF,
                                               SILDeclRef method,
                                               CanSILFunctionType origFnType,
                                               CanSILFunctionType substFnType,
-                                              ArrayRef<Substitution> subs,
+                                              SubstitutionList subs,
                                               ObjCMessageKind kind) {
   assert((method.kind == SILDeclRef::Kind::Initializer
           || method.kind == SILDeclRef::Kind::Allocator
@@ -763,7 +769,10 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   // FIXME: Maybe cache the thunk by function and closure types?
   llvm::Function *fwd =
     llvm::Function::Create(fwdTy, llvm::Function::InternalLinkage,
-                           "_TPAo", &IGM.Module);
+                           MANGLE_AS_STRING(OBJC_PARTIAL_APPLY_THUNK_SYM),
+                           &IGM.Module);
+  fwd->setCallingConv(
+      expandCallingConv(IGM, SILFunctionTypeRepresentation::Thick));
 
   auto initialAttrs = IGM.constructInitialAttributes();
   // Merge initialAttrs with attrs.
@@ -777,7 +786,7 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   
   // Do we need to lifetime-extend self?
   bool lifetimeExtendsSelf;
-  auto results = origMethodType->getAllResults();
+  auto results = origMethodType->getResults();
   if (results.size() == 1) {
     switch (results[0].getConvention()) {
     case ResultConvention::UnownedInnerPointer:
@@ -799,7 +808,6 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   bool retainsSelf;
   switch (origMethodType->getParameters().back().getConvention()) {
   case ParameterConvention::Direct_Unowned:
-  case ParameterConvention::Direct_Deallocating:
     retainsSelf = false;
     break;
   case ParameterConvention::Direct_Guaranteed:
@@ -830,16 +838,17 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   llvm::Value *formalIndirectResult = nullptr;
   llvm::Value *indirectedDirectResult = nullptr;
   const LoadableTypeInfo *indirectedResultTI = nullptr;
-  if (origMethodType->hasIndirectResults()) {
+  if (origMethodType->hasIndirectFormalResults()) {
     // We should never import an ObjC method as returning a tuple which
     // would get broken up into multiple results like this.
-    assert(origMethodType->getNumIndirectResults() == 1);
+    assert(origMethodType->getNumIndirectFormalResults() == 1);
     formalIndirectResult = params.claimNext();
   } else {
-    SILType appliedResultTy = origMethodType->getSILResult();
+    SILType appliedResultTy = origMethodType->getDirectFormalResultsType();
     indirectedResultTI =
       &cast<LoadableTypeInfo>(IGM.getTypeInfo(appliedResultTy));
-    if (indirectedResultTI->getSchema().requiresIndirectResult(IGM)) {
+    auto &nativeSchema = indirectedResultTI->nativeReturnValueSchema(IGM);
+    if (nativeSchema.requiresIndirect()) {
       indirectedDirectResult = params.claimNext();
     }
   }
@@ -854,18 +863,19 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
 
   for (auto info : origParamInfos) {
     // Addresses consist of a single pointer argument.
-    if (isIndirectParameter(info.getConvention())) {
+    if (isIndirectFormalParameter(info.getConvention())) {
       translatedParams.add(params.claimNext());
       continue;
     }
     // Otherwise, we have a loadable type that can either be passed directly or
     // indirectly.
-    assert(info.getSILType().isObject());
-    auto &ti = cast<LoadableTypeInfo>(IGM.getTypeInfo(info.getSILType()));
-    auto schema = ti.getSchema();
+    assert(info.getSILStorageType().isObject());
+    auto &ti =
+        cast<LoadableTypeInfo>(IGM.getTypeInfo(info.getSILStorageType()));
 
     // Load the indirectly passed parameter.
-    if (schema.requiresIndirectParameter(IGM)) {
+    auto &nativeSchema = ti.nativeParameterValueSchema(IGM);
+    if (nativeSchema.requiresIndirect()) {
       Address paramAddr = ti.getAddressForPointer(params.claimNext());
       ti.loadAsTake(subIGF, paramAddr, translatedParams);
       continue;
@@ -879,7 +889,7 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   CallEmission emission
     = prepareObjCMethodRootCall(subIGF, method.getMethod(),
                                 origMethodType, origMethodType,
-                                ArrayRef<Substitution>{},
+                                SubstitutionList{},
                                 method.getMessageKind());
   
   Explosion args;
@@ -901,7 +911,7 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
       subIGF.emitObjCAutoreleaseCall(self);
     }
     // Release the context.
-    subIGF.emitNativeStrongRelease(context);
+    subIGF.emitNativeStrongRelease(context, subIGF.getDefaultAtomicity());
   };
   
    // Emit the call and produce the return value.
@@ -916,8 +926,9 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
     emission.emitToExplosion(result);
     cleanup();
     auto &callee = emission.getCallee();
-    auto resultType = callee.getOrigFunctionType()->getSILResult();
-    subIGF.emitScalarReturn(resultType, result);
+    auto resultType =
+        callee.getOrigFunctionType()->getDirectFormalResultsType();
+    subIGF.emitScalarReturn(resultType, result, true /*isSwiftCCReturn*/);
   }
   
   return fwd;
@@ -1097,7 +1108,8 @@ static clang::CanQualType getObjCPropertyType(IRGenModule &IGM,
   auto getter = property->getGetter();
   assert(getter);
   CanSILFunctionType methodTy = getObjCMethodType(IGM, getter);
-  return IGM.getClangType(methodTy->getCSemanticResult().getSwiftRValueType());
+  return IGM.getClangType(
+      methodTy->getFormalCSemanticResult().getSwiftRValueType());
 }
 
 void irgen::getObjCEncodingForPropertyType(IRGenModule &IGM,
@@ -1162,7 +1174,7 @@ static llvm::Constant *getObjCEncodingForTypes(IRGenModule &IGM,
 static llvm::Constant *getObjCEncodingForMethodType(IRGenModule &IGM,
                                                     CanSILFunctionType fnType,
                                                     bool useExtendedEncoding) {
-  SILType resultType = fnType->getCSemanticResult();
+  SILType resultType = fnType->getFormalCSemanticResult();
 
   // Get the inputs without 'self'.
   auto inputs = fnType->getParameters().drop_back();
@@ -1339,34 +1351,39 @@ void irgen::emitObjCSetterDescriptorParts(IRGenModule &IGM,
   llvm_unreachable("unknown storage!");
 }
 
+static void buildMethodDescriptor(ConstantArrayBuilder &descriptors,
+                                  llvm::Constant *selectorRef,
+                                  llvm::Constant *atEncoding,
+                                  llvm::Constant *impl) {
+  auto descriptor = descriptors.beginStruct();
+  descriptor.add(selectorRef);
+  descriptor.add(atEncoding);
+  descriptor.add(impl);
+  descriptor.finishAndAddTo(descriptors);
+}
+
 /// Emit an Objective-C method descriptor for the given method.
 /// struct method_t {
 ///   SEL name;
 ///   const char *types;
 ///   IMP imp;
 /// };
-llvm::Constant *irgen::emitObjCMethodDescriptor(IRGenModule &IGM,
-                                                AbstractFunctionDecl *method) {
+void irgen::emitObjCMethodDescriptor(IRGenModule &IGM,
+                                     ConstantArrayBuilder &descriptors,
+                                     AbstractFunctionDecl *method) {
   llvm::Constant *selectorRef, *atEncoding, *impl;
   emitObjCMethodDescriptorParts(IGM, method,
                                 /*extended*/ false,
                                 /*concrete*/ true,
                                 selectorRef, atEncoding, impl);
-  
-  llvm::Constant *fields[] = { selectorRef, atEncoding, impl };
-  return llvm::ConstantStruct::getAnon(IGM.getLLVMContext(), fields);
+  buildMethodDescriptor(descriptors, selectorRef, atEncoding, impl);
 }
 
-Optional<llvm::Constant*> 
-irgen::emitObjCIVarInitDestroyDescriptor(IRGenModule &IGM, ClassDecl *cd,
-                                         bool isDestroyer) {
-  // Check whether we have an implementation.
-  Optional<llvm::Function*> objcImpl 
-    = IGM.getAddrOfIVarInitDestroy(cd, isDestroyer, /*isForeign=*/ true,
-                                   NotForDefinition);
-  if (!objcImpl)
-    return None;
-
+void irgen::emitObjCIVarInitDestroyDescriptor(IRGenModule &IGM,
+                                              ConstantArrayBuilder &descriptors,
+                                              ClassDecl *cd,
+                                              llvm::Function *objcImpl,
+                                              bool isDestroyer) {
   /// The first element is the selector.
   SILDeclRef declRef = SILDeclRef(cd, 
                                   isDestroyer? SILDeclRef::Kind::IVarDestroyer
@@ -1375,19 +1392,17 @@ irgen::emitObjCIVarInitDestroyDescriptor(IRGenModule &IGM, ClassDecl *cd,
                                   1, 
                                   /*foreign*/ true);
   Selector selector(declRef);
-  llvm::Constant *selectorRef = IGM.getAddrOfObjCMethodName(selector.str());
+  auto selectorRef = IGM.getAddrOfObjCMethodName(selector.str());
   
   /// The second element is the type @encoding, which is always "@?"
   /// for a function type.
-  llvm::Constant *atEncoding = IGM.getAddrOfGlobalString("@?");
+  auto atEncoding = IGM.getAddrOfGlobalString("@?");
 
   /// The third element is the method implementation pointer.
-  llvm::Constant *impl = llvm::ConstantExpr::getBitCast(*objcImpl,
-                                                        IGM.Int8PtrTy);
+  auto impl = llvm::ConstantExpr::getBitCast(objcImpl, IGM.Int8PtrTy);
 
   // Form the method_t instance.
-  llvm::Constant *fields[] = { selectorRef, atEncoding, impl };
-  return llvm::ConstantStruct::getAnon(IGM.getLLVMContext(), fields);
+  buildMethodDescriptor(descriptors, selectorRef, atEncoding, impl);
 }
 
 llvm::Constant *
@@ -1400,7 +1415,7 @@ irgen::getMethodTypeExtendedEncoding(IRGenModule &IGM,
 llvm::Constant *
 irgen::getBlockTypeExtendedEncoding(IRGenModule &IGM,
                                     CanSILFunctionType invokeTy) {
-  SILType resultType = invokeTy->getCSemanticResult();
+  SILType resultType = invokeTy->getFormalCSemanticResult();
 
   // Skip the storage pointer, which is encoded as '@?' to avoid the infinite
   // recursion of the usual '@?<...>' rule for blocks.
@@ -1411,54 +1426,22 @@ irgen::getBlockTypeExtendedEncoding(IRGenModule &IGM,
                                  /*extended*/ true);
 }
 
-/// Emit Objective-C method descriptors for the property accessors of the given
-/// property. Returns a pair of Constants consisting of the getter and setter
-/// function pointers, in that order. The setter llvm::Constant* will be null if
-/// the property is not settable.
-std::pair<llvm::Constant *, llvm::Constant *>
-irgen::emitObjCPropertyMethodDescriptors(IRGenModule &IGM,
-                                         VarDecl *property) {
+void irgen::emitObjCGetterDescriptor(IRGenModule &IGM,
+                                     ConstantArrayBuilder &descriptors,
+                                     AbstractStorageDecl *storage) {
   llvm::Constant *selectorRef, *atEncoding, *impl;
-  emitObjCGetterDescriptorParts(IGM, property,
+  emitObjCGetterDescriptorParts(IGM, storage,
                                 selectorRef, atEncoding, impl);
-  
-  llvm::Constant *getterFields[] = {selectorRef, atEncoding, impl};
-  llvm::Constant *getter = llvm::ConstantStruct::getAnon(IGM.getLLVMContext(),
-                                                         getterFields);
-  llvm::Constant *setter = nullptr;
-  
-  if (property->isSettable(property->getDeclContext())) {
-    emitObjCSetterDescriptorParts(IGM, property,
-                                  selectorRef, atEncoding, impl);
-    
-    llvm::Constant *setterFields[] = {selectorRef, atEncoding, impl};
-    setter = llvm::ConstantStruct::getAnon(IGM.getLLVMContext(), setterFields);
-  }
-  
-  return {getter, setter};
+  buildMethodDescriptor(descriptors, selectorRef, atEncoding, impl);
 }
 
-std::pair<llvm::Constant *, llvm::Constant *>
-irgen::emitObjCSubscriptMethodDescriptors(IRGenModule &IGM,
-                                          SubscriptDecl *subscript) {
+void irgen::emitObjCSetterDescriptor(IRGenModule &IGM,
+                                     ConstantArrayBuilder &descriptors,
+                                     AbstractStorageDecl *storage) {
   llvm::Constant *selectorRef, *atEncoding, *impl;
-  emitObjCGetterDescriptorParts(IGM, subscript,
+  emitObjCSetterDescriptorParts(IGM, storage,
                                 selectorRef, atEncoding, impl);
-  
-  llvm::Constant *getterFields[] = {selectorRef, atEncoding, impl};
-  llvm::Constant *getter = llvm::ConstantStruct::getAnon(IGM.getLLVMContext(),
-                                                         getterFields);
-  llvm::Constant *setter = nullptr;
-  
-  if (subscript->isSettable()) {
-    emitObjCSetterDescriptorParts(IGM, subscript,
-                                  selectorRef, atEncoding, impl);
-    
-    llvm::Constant *setterFields[] = {selectorRef, atEncoding, impl};
-    setter = llvm::ConstantStruct::getAnon(IGM.getLLVMContext(), setterFields);
-  }
-  
-  return {getter, setter};
+  buildMethodDescriptor(descriptors, selectorRef, atEncoding, impl);
 }
 
 bool irgen::requiresObjCMethodDescriptor(FuncDecl *method) {
@@ -1475,48 +1458,15 @@ bool irgen::requiresObjCMethodDescriptor(ConstructorDecl *constructor) {
 
 bool irgen::requiresObjCPropertyDescriptor(IRGenModule &IGM,
                                            VarDecl *property) {
-  if (!property->isObjC())
-    return false;
-
   // Don't generate a descriptor for a property without any accessors.
   // This is only possible in SIL files because Sema will normally
   // implicitly synthesize accessors for @objc properties.
-  if (!property->getGetter())
-    return false;
-
-  // Don't expose objc properties for function types we can't bridge.
-  if (auto ft = property->getType()->getAs<AnyFunctionType>())
-    switch (ft->getRepresentation()) {
-    case FunctionType::Representation::Thin:
-      // We can't bridge thin types at all.
-      return false;
-    case FunctionType::Representation::Swift:
-    case FunctionType::Representation::Block:
-    case FunctionType::Representation::CFunctionPointer:
-      return true;
-    }
-  
-  return true;
+  return property->isObjC() && property->getGetter();
 }
 
 bool irgen::requiresObjCSubscriptDescriptor(IRGenModule &IGM,
                                             SubscriptDecl *subscript) {
-  if (!subscript->isObjC())
-    return false;
-  
-  // Don't expose objc properties for function types we can't bridge.
-  if (auto ft = subscript->getElementType()->getAs<AnyFunctionType>())
-    switch (ft->getRepresentation()) {
-    case FunctionType::Representation::Thin:
-      // We can't bridge thin types at all.
-      return false;
-    case FunctionType::Representation::Swift:
-    case FunctionType::Representation::Block:
-    case FunctionType::Representation::CFunctionPointer:
-      return true;
-    }
-  
-  return true;
+  return subscript->isObjC();
 }
 
 llvm::Value *IRGenFunction::emitBlockCopyCall(llvm::Value *value) {

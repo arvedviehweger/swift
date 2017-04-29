@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -115,7 +115,6 @@ private:
     }
   }
 
-  StringRef getName() override { return "ConditionForwarding"; }
 };
 
 /// Returns true if all instructions of block \p BB are safe to be moved
@@ -164,7 +163,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
     if (isDebugInst(ArgUser))
       continue;
 
-    if (ArgUser->getParent()->getSinglePredecessor() == SEI->getParent()) {
+    if (ArgUser->getParent()->getSinglePredecessorBlock() == SEI->getParent()) {
       continue;
     }
     return false;
@@ -181,8 +180,8 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   // Check if all predecessors of the merging block pass an Enum to its argument
   // and have a single predecessor - the block of the condition.
   SILBasicBlock *CommonBranchBlock = nullptr;
-  for (SILBasicBlock *Pred : BB->getPreds()) {
-    SILBasicBlock *PredPred = Pred->getSinglePredecessor();
+  for (SILBasicBlock *Pred : BB->getPredecessorBlocks()) {
+    SILBasicBlock *PredPred = Pred->getSinglePredecessorBlock();
     if (!PredPred)
       return false;
 
@@ -234,7 +233,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
       continue;
     }
     SILBasicBlock *UseBlock = ArgUser->getParent();
-    if (UseBlock->getSinglePredecessor() == SEI->getParent()) {
+    if (UseBlock->getSinglePredecessorBlock() == SEI->getParent()) {
       // The Arg is used in a successor block of the switch_enum. To keep things
       // simple, we just create a new block argument and later (see below) we
       // pass the corresponding enum to the block. This argument will be deleted
@@ -242,7 +241,8 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
       SILArgument *NewArg = nullptr;
       if (NeedEnumArg.insert(UseBlock).second) {
         // The first Enum use in this UseBlock.
-        NewArg = UseBlock->createArgument(Arg->getType());
+        NewArg = UseBlock->createPHIArgument(Arg->getType(),
+                                             ValueOwnershipKind::Owned);
       } else {
         // We already inserted the Enum argument for this UseBlock.
         assert(UseBlock->getNumArguments() >= 1);

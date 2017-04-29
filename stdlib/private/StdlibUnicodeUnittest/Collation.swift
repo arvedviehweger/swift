@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -338,13 +338,13 @@ public struct StringComparisonTest {
 
 public func sortKey(forCollationElements ces: [UInt64]) -> ([UInt16], [UInt16], [UInt16]) {
   func L1(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce >> 32)
+    return UInt16(extendingOrTruncating: ce &>> 32)
   }
   func L2(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce >> 16)
+    return UInt16(extendingOrTruncating: ce &>> 16)
   }
   func L3(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce)
+    return UInt16(extendingOrTruncating: ce)
   }
 
   var result1: [UInt16] = []

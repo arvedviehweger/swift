@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -20,14 +20,14 @@
 using namespace swift;
 using namespace Lowering;
 
-RValue &ArgumentSource::forceAndPeekRValue(SILGenFunction &gen) & {
+RValue &ArgumentSource::forceAndPeekRValue(SILGenFunction &SGF) & {
   if (isRValue()) {
     return peekRValue();
   }
 
   auto expr = asKnownExpr();
   StoredKind = Kind::RValue;
-  new (&Storage.TheRV.Value) RValue(gen.emitRValue(expr));
+  new (&Storage.TheRV.Value) RValue(SGF.emitRValue(expr));
   Storage.TheRV.Loc = expr;
   return Storage.TheRV.Value;
 }
@@ -55,72 +55,102 @@ bool ArgumentSource::requiresCalleeToEvaluate() {
   case Kind::LValue:
     return false;
   case Kind::Expr:
-    return isa<TupleShuffleExpr>(asKnownExpr());
+    // FIXME: TupleShuffleExprs come in two flavors:
+    //
+    // 1) as apply arguments, where they're used to insert default
+    // argument value and collect varargs
+    //
+    // 2) as tuple conversions, where they can introduce, eliminate
+    // and re-order fields
+    //
+    // Case 1) must be emitted by ArgEmitter, and Case 2) must be
+    // emitted by RValueEmitter.
+    //
+    // It would be good to split up TupleShuffleExpr into these two
+    // cases, and simplify ArgEmitter since it no longer has to deal
+    // with re-ordering. However for now, SubscriptExpr emits the
+    // index argument via the RValueEmitter, so the RValueEmitter has
+    // to know about varargs, duplicating some of the logic in
+    // ArgEmitter.
+    //
+    // Once this is fixed, we can also consider allowing subscripts
+    // to have default arguments.
+    if (auto *shuffleExpr = dyn_cast<TupleShuffleExpr>(asKnownExpr())) {
+      for (auto index : shuffleExpr->getElementMapping()) {
+        if (index == TupleShuffleExpr::DefaultInitialize ||
+            index == TupleShuffleExpr::CallerDefaultInitialize ||
+            index == TupleShuffleExpr::Variadic)
+          return true;
+      }
+    }
+    return false;
   }
+
+  llvm_unreachable("Unhandled Kind in switch.");
 }
 
-RValue ArgumentSource::getAsRValue(SILGenFunction &gen, SGFContext C) && {
+RValue ArgumentSource::getAsRValue(SILGenFunction &SGF, SGFContext C) && {
   assert(!isLValue());
   if (isRValue())
     return std::move(*this).asKnownRValue();
 
-  return gen.emitRValue(std::move(*this).asKnownExpr(), C);
+  return SGF.emitRValue(std::move(*this).asKnownExpr(), C);
 }
 
-ManagedValue ArgumentSource::getAsSingleValue(SILGenFunction &gen,
+ManagedValue ArgumentSource::getAsSingleValue(SILGenFunction &SGF,
                                               SGFContext C) && {
   if (isRValue()) {
     auto loc = getKnownRValueLocation();
-    return std::move(*this).asKnownRValue().getAsSingleValue(gen, loc);
+    return std::move(*this).asKnownRValue().getAsSingleValue(SGF, loc);
   }
   if (isLValue()) {
     auto loc = getKnownLValueLocation();
-    return gen.emitAddressOfLValue(loc, std::move(*this).asKnownLValue(),
+    return SGF.emitAddressOfLValue(loc, std::move(*this).asKnownLValue(),
                                    AccessKind::ReadWrite);
   }
 
   auto e = std::move(*this).asKnownExpr();
   if (e->getType()->is<InOutType>()) {
-    return gen.emitAddressOfLValue(e, gen.emitLValue(e, AccessKind::ReadWrite),
+    return SGF.emitAddressOfLValue(e, SGF.emitLValue(e, AccessKind::ReadWrite),
                                    AccessKind::ReadWrite);
   } else {
-    return gen.emitRValueAsSingleValue(e, C);
+    return SGF.emitRValueAsSingleValue(e, C);
   }
 }
 
 
-ManagedValue ArgumentSource::getAsSingleValue(SILGenFunction &gen,
+ManagedValue ArgumentSource::getAsSingleValue(SILGenFunction &SGF,
                                               AbstractionPattern origFormalType,
                                               SGFContext C) && {
   auto loc = getLocation();
   auto substFormalType = getSubstType();
-  ManagedValue outputValue = std::move(*this).getAsSingleValue(gen);
-  return gen.emitSubstToOrigValue(loc,
+  ManagedValue outputValue = std::move(*this).getAsSingleValue(SGF);
+  return SGF.emitSubstToOrigValue(loc,
                                   outputValue, origFormalType,
                                   substFormalType, C);
 }
 
-void ArgumentSource::forwardInto(SILGenFunction &gen, Initialization *dest) && {
+void ArgumentSource::forwardInto(SILGenFunction &SGF, Initialization *dest) && {
   assert(!isLValue());
   if (isRValue()) {
     auto loc = getKnownRValueLocation();
-    return std::move(*this).asKnownRValue().forwardInto(gen, loc, dest);
+    return std::move(*this).asKnownRValue().forwardInto(SGF, loc, dest);
   }
 
   auto e = std::move(*this).asKnownExpr();
-  return gen.emitExprInto(e, dest);
+  return SGF.emitExprInto(e, dest);
 }
 
-ManagedValue ArgumentSource::materialize(SILGenFunction &gen) && {
+ManagedValue ArgumentSource::materialize(SILGenFunction &SGF) && {
   assert(!isLValue());
   if (isRValue()) {
     auto loc = getKnownRValueLocation();
-    return std::move(*this).asKnownRValue().materialize(gen, loc);
+    return std::move(*this).asKnownRValue().materialize(SGF, loc);
   }
 
   auto expr = std::move(*this).asKnownExpr();
-  auto temp = gen.emitTemporary(expr, gen.getTypeLowering(expr->getType()));
-  gen.emitExprInto(expr, temp.get());
+  auto temp = SGF.emitTemporary(expr, SGF.getTypeLowering(expr->getType()));
+  SGF.emitExprInto(expr, temp.get());
   return temp->getManagedAddress();
 }
 
@@ -186,4 +216,18 @@ void ArgumentSource::forwardInto(SILGenFunction &SGF,
   // really handle.
   auto substLoweredType = destTL.getLoweredType().getSwiftRValueType();
   RValue(SGF, loc, substLoweredType, outputValue).forwardInto(SGF, loc, dest);
+}
+
+SILType ArgumentSource::getSILSubstRValueType(SILGenFunction &SGF) const & {
+  CanSILFunctionType funcType = SGF.F.getLoweredFunctionType();
+  CanType substType = getSubstType();
+  AbstractionPattern origType(funcType->getGenericSignature(), substType);
+  return SGF.getLoweredType(origType, substType);
+}
+
+SILType ArgumentSource::getSILSubstType(SILGenFunction &SGF) const & {
+  CanSILFunctionType funcType = SGF.F.getLoweredFunctionType();
+  CanType substType = getSubstType();
+  AbstractionPattern origType(funcType->getGenericSignature(), substType);
+  return SGF.getLoweredType(origType, substType);
 }

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -42,9 +42,13 @@ private:
   std::unique_ptr<ParserUnit> Parser;
   class FormatterDiagConsumer : public swift::DiagnosticConsumer {
     void handleDiagnostic(SourceManager &SM, SourceLoc Loc, DiagnosticKind Kind,
-                          StringRef Text,
+                          StringRef FormatString,
+                          ArrayRef<DiagnosticArgument> FormatArgs,
                           const swift::DiagnosticInfo &Info) override {
-      llvm::errs() << "Parse error: " << Text << "\n";
+      llvm::errs() << "Parse error: ";
+      DiagnosticEngine::formatDiagnosticText(llvm::errs(), FormatString,
+                                             FormatArgs);
+      llvm::errs() << "\n";
     }
   } DiagConsumer;
 

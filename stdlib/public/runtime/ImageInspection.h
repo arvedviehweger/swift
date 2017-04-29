@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -19,9 +19,17 @@
 #ifndef SWIFT_RUNTIME_IMAGE_INSPECTION_H
 #define SWIFT_RUNTIME_IMAGE_INSPECTION_H
 
+#include "ImageInspectionELF.h"
 #include <cstdint>
 
 namespace swift {
+  // This is a platform independent version of Dl_info from dlfcn.h
+  struct SymbolInfo {
+    const char *fileName;
+    void *baseAddress;
+    const char *symbolName;
+    void *symbolAddress;
+  };
 
 /// Load the metadata from the image necessary to find a type's
 /// protocol conformance.
@@ -37,6 +45,7 @@ void addImageProtocolConformanceBlockCallback(const void *start,
 void addImageTypeMetadataRecordBlockCallback(const void *start,
                                              uintptr_t size);
 
+int lookupSymbol(const void *address, SymbolInfo *info);
 } // end namespace swift
 
 #endif // SWIFT_RUNTIME_IMAGE_INSPECTION_H

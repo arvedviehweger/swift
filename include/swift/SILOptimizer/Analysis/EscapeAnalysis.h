@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -299,6 +299,8 @@ public:
         case EscapeState::Global:
           return true;
       }
+
+      llvm_unreachable("Unhandled EscapeState in switch.");
     }
 
     /// Returns the content node if of this node if it exists in the graph.
@@ -789,9 +791,23 @@ public:
   /// node, the pointers do not alias.
   bool canPointToSameMemory(SILValue V1, SILValue V2);
 
-  virtual void invalidate(InvalidationKind K) override;
+  /// Invalidate all information in this analysis.
+  virtual void invalidate() override;
 
+  /// Invalidate all of the information for a specific function.
   virtual void invalidate(SILFunction *F, InvalidationKind K) override;
+
+  /// Notify the analysis about a newly created function.
+  virtual void notifyAddFunction(SILFunction *F) override { }
+
+  /// Notify the analysis about a function which will be deleted from the
+  /// module.
+  virtual void notifyDeleteFunction(SILFunction *F) override {
+    invalidate(F, InvalidationKind::Nothing);
+  }
+
+  /// Notify the analysis about changed witness or vtables.
+  virtual void invalidateFunctionTables() override { }
 
   virtual void handleDeleteNotification(ValueBase *I) override;
 

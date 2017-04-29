@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -37,7 +37,32 @@ namespace swift {
 /// UnqualifiedLookupResult - One result of unqualified lookup.
 struct UnqualifiedLookupResult {
 private:
+
+  /// The declaration through where we find Value. For instance,
+  ///
+  /// class BaseClass {
+  ///   func foo() {}
+  /// }
+  ///
+  /// class DerivedClass : BaseClass {
+  ///   func bar() {}
+  /// }
+  ///
+  /// When finding foo() from the body of DerivedClass, Base is DerivedClass.
+  ///
+  /// Another example:
+  ///
+  /// class BaseClass {
+  ///   func bar() {}
+  ///   func foo() {}
+  /// }
+  ///
+  /// When finding bar() from the function body of foo(), Base is the implicit
+  /// self parameter in foo().
   ValueDecl *Base;
+
+  /// The declaration corresponds to the given name; i.e. the decl we are
+  /// looking up.
   ValueDecl *Value;
 
 public:
@@ -242,7 +267,7 @@ bool removeOverriddenDecls(SmallVectorImpl<ValueDecl*> &decls);
 ///
 /// \returns true if any shadowed declarations were removed.
 bool removeShadowedDecls(SmallVectorImpl<ValueDecl*> &decls,
-                         const Module *curModule,
+                         const ModuleDecl *curModule,
                          LazyResolver *typeResolver);
 
 /// Finds decls visible in the given context and feeds them to the given
@@ -295,12 +320,12 @@ enum class ResolutionKind {
 ///        being performed, for checking accessibility. This must be either a
 ///        FileUnit or a Module.
 /// \param extraImports Private imports to include in this search.
-void lookupInModule(Module *module, Module::AccessPathTy accessPath,
+void lookupInModule(ModuleDecl *module, ModuleDecl::AccessPathTy accessPath,
                     DeclName name, SmallVectorImpl<ValueDecl *> &decls,
                     NLKind lookupKind, ResolutionKind resolutionKind,
                     LazyResolver *typeResolver,
                     const DeclContext *moduleScopeContext,
-                    ArrayRef<Module::ImportedModule> extraImports = {});
+                    ArrayRef<ModuleDecl::ImportedModule> extraImports = {});
 
 } // end namespace namelookup
 } // end namespace swift

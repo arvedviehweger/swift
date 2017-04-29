@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -15,7 +15,6 @@
 #include "SILGenFunction.h"
 #include "swift/AST/ASTNode.h"
 #include "swift/AST/ASTWalker.h"
-#include "swift/Basic/Fallthrough.h"
 #include "swift/Parse/Lexer.h"
 #include "swift/SIL/FormalLinkage.h"
 #include "llvm/IR/Intrinsics.h"
@@ -56,8 +55,8 @@ static void walkFunctionForProfiling(AbstractFunctionDecl *Root,
 
   // We treat class initializers as part of the constructor for profiling.
   if (auto *CD = dyn_cast<ConstructorDecl>(Root)) {
-    Type DT = CD->getDeclContext()->getDeclaredTypeInContext();
-    auto *NominalType = DT->getNominalOrBoundGenericNominal();
+    auto *NominalType = CD->getDeclContext()
+        ->getAsNominalTypeOrNominalTypeExtensionContext();
     for (auto *Member : NominalType->getMembers()) {
       // Find pattern binding declarations that have initializers.
       if (auto *PBD = dyn_cast<PatternBindingDecl>(Member))
@@ -124,8 +123,6 @@ struct MapRegionCounters : public ASTWalker {
       CounterMap[WS->getBody()] = NextCounter++;
     } else if (auto *RWS = dyn_cast<RepeatWhileStmt>(S)) {
       CounterMap[RWS->getBody()] = NextCounter++;
-    } else if (auto *FS = dyn_cast<ForStmt>(S)) {
-      CounterMap[FS->getBody()] = NextCounter++;
     } else if (auto *FES = dyn_cast<ForEachStmt>(S)) {
       CounterMap[FES->getBody()] = NextCounter++;
       walkPatternForProfiling(FES->getIterator(), *this);
@@ -226,6 +223,8 @@ public:
     case Kind::Ref:
       return LHS->expand(Builder, Counters);
     }
+
+    llvm_unreachable("Unhandled Kind in switch.");
   }
 };
 
@@ -535,14 +534,6 @@ public:
       assignCounter(RWS->getCond(), CounterExpr::Ref(BodyCounter));
       RepeatWhileStack.push_back(RWS);
 
-    } else if (auto *FS = dyn_cast<ForStmt>(S)) {
-      assignCounter(FS, CounterExpr::Zero());
-      if (Expr *E = FS->getCond().getPtrOrNull())
-        assignCounter(E, CounterExpr::Ref(getCurrentCounter()));
-      if (Expr *E = FS->getIncrement().getPtrOrNull())
-        assignCounter(E, CounterExpr::Zero());
-      assignCounter(FS->getBody());
-
     } else if (auto *FES = dyn_cast<ForEachStmt>(S)) {
       assignCounter(FES, CounterExpr::Zero());
       assignCounter(FES->getBody());
@@ -592,13 +583,6 @@ public:
       (void) RWS;
       RepeatWhileStack.pop_back();
 
-    } else if (auto *FS = dyn_cast<ForStmt>(S)) {
-      // Both the condition and the increment are reached through the backedge.
-      if (Expr *E = FS->getCond().getPtrOrNull())
-        addToCounter(E, getExitCounter());
-      if (Expr *E = FS->getIncrement().getPtrOrNull())
-        addToCounter(E, getExitCounter());
-
     } else if (auto *CS = dyn_cast<ContinueStmt>(S)) {
       // Continues create extra backedges, add them to the appropriate counters.
       if (!isa<RepeatWhileStmt>(CS->getTarget()))
@@ -606,9 +590,7 @@ public:
       if (auto *WS = dyn_cast<WhileStmt>(CS->getTarget())) {
         if (auto *E = getConditionNode(WS->getCond()))
           addToCounter(E, getCurrentCounter());
-      } else if (auto *FS = dyn_cast<ForStmt>(CS->getTarget()))
-        if (Expr *E = FS->getCond().getPtrOrNull())
-          addToCounter(E, getCurrentCounter());
+      }
       terminateRegion(S);
 
     } else if (auto *BS = dyn_cast<BreakStmt>(S)) {
@@ -659,7 +641,7 @@ public:
       assignCounter(E);
     } else if (auto *IE = dyn_cast<IfExpr>(E)) {
       CounterExpr &ThenCounter = assignCounter(IE->getThenExpr());
-      if (Parent.isNull())
+      if (RegionStack.empty())
         assignCounter(IE->getElseExpr());
       else
         assignCounter(IE->getElseExpr(),
@@ -694,6 +676,8 @@ getEquivalentPGOLinkage(FormalLinkage Linkage) {
   case FormalLinkage::Private:
     return llvm::GlobalValue::PrivateLinkage;
   }
+
+  llvm_unreachable("Unhandled FormalLinkage in switch.");
 }
 
 void SILGenProfiling::assignRegionCounters(Decl *Root) {

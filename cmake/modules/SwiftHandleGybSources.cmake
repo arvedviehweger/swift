@@ -46,12 +46,23 @@ function(handle_gyb_source_single dependency_out_var_name)
 
   get_filename_component(dir "${GYB_SINGLE_OUTPUT}" DIRECTORY)
   get_filename_component(basename "${GYB_SINGLE_OUTPUT}" NAME)
+
+  # Handle foo.gyb in pattern ``gyb.expand('foo.gyb'`` as a dependency
+  set(gyb_expand_deps "")
+  file(READ "${GYB_SINGLE_SOURCE}" gyb_file)
+  string(REGEX MATCHALL "\\\$\{[\r\n\t ]*gyb.expand\\\([\r\n\t ]*[\'\"]([^\'\"]*)[\'\"]" gyb_expand_matches "${gyb_file}")
+  foreach(match ${gyb_expand_matches})
+    string(REGEX MATCH "[\'\"]\([^\'\"]*\)[\'\"]" gyb_dep "${match}")
+    list(APPEND gyb_expand_deps "${CMAKE_MATCH_1}")
+  endforeach()
+  list(REMOVE_DUPLICATES gyb_expand_deps)
+
   add_custom_command_target(
       dependency_target
       COMMAND
           "${CMAKE_COMMAND}" -E make_directory "${dir}"
       COMMAND
-          "${gyb_tool}" "${gyb_flags}"
+          "${PYTHON_EXECUTABLE}" "${gyb_tool}" "${gyb_flags}"
           -o "${GYB_SINGLE_OUTPUT}.tmp" "${GYB_SINGLE_SOURCE}"
       COMMAND
           "${CMAKE_COMMAND}" -E copy_if_different
@@ -59,7 +70,7 @@ function(handle_gyb_source_single dependency_out_var_name)
       COMMAND
           "${CMAKE_COMMAND}" -E remove "${GYB_SINGLE_OUTPUT}.tmp"
       OUTPUT "${GYB_SINGLE_OUTPUT}"
-      DEPENDS "${gyb_tool_source}" "${GYB_SINGLE_DEPENDS}" "${GYB_SINGLE_SOURCE}"
+      DEPENDS "${gyb_tool_source}" "${GYB_SINGLE_DEPENDS}" "${GYB_SINGLE_SOURCE}" "${gyb_expand_deps}"
       COMMENT "Generating ${basename} from ${GYB_SINGLE_SOURCE} ${GYB_SINGLE_COMMENT}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       SOURCES "${GYB_SINGLE_SOURCE}"
@@ -113,10 +124,20 @@ function(handle_gyb_sources dependency_out_var_name sources_var_name arch)
     if(src STREQUAL src_sans_gyb)
       list(APPEND de_gybbed_sources "${src}")
     else()
-      if (arch)
-        set(dir "${CMAKE_CURRENT_BINARY_DIR}/${ptr_size}")
+
+      # On Windows (using Visual Studio), the generated project files assume that the
+      # generated GYB files will be in the source, not binary directory.
+      # We can work around this by modifying the root directory when generating VS projects.
+      if ("${CMAKE_GENERATOR_PLATFORM}" MATCHES "Visual Studio")
+        set(dir_root ${CMAKE_CURRENT_SOURCE_DIR})
       else()
-        set(dir "${CMAKE_CURRENT_BINARY_DIR}")
+        set(dir_root ${CMAKE_CURRENT_BINARY_DIR})
+      endif()
+      
+      if (arch)
+        set(dir "${dir_root}/${ptr_size}")
+      else()
+        set(dir "${dir_root}")
       endif()
       set(output_file_name "${dir}/${src_sans_gyb}")
       list(APPEND de_gybbed_sources "${output_file_name}")

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -10,12 +10,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/AST/Expr.h"
 #include "swift/SIL/SILBuilder.h"
+
 using namespace swift;
 
 //===----------------------------------------------------------------------===//
 // SILBuilder Implementation
 //===----------------------------------------------------------------------===//
+
+IntegerLiteralInst *SILBuilder::createIntegerLiteral(IntegerLiteralExpr *E) {
+  return insert(IntegerLiteralInst::create(E, getSILDebugLocation(E), F));
+}
+
+FloatLiteralInst *SILBuilder::createFloatLiteral(FloatLiteralExpr *E) {
+  return insert(FloatLiteralInst::create(E, getSILDebugLocation(E), F));
+}
 
 TupleInst *SILBuilder::createTuple(SILLocation loc, ArrayRef<SILValue> elts) {
   // Derive the tuple type from the elements.
@@ -30,11 +40,11 @@ TupleInst *SILBuilder::createTuple(SILLocation loc, ArrayRef<SILValue> elts) {
 
 SILType SILBuilder::getPartialApplyResultType(SILType origTy, unsigned argCount,
                                         SILModule &M,
-                                        ArrayRef<Substitution> subs,
+                                        SubstitutionList subs,
                                         ParameterConvention calleeConvention) {
   CanSILFunctionType FTI = origTy.castTo<SILFunctionType>();
   if (!subs.empty())
-    FTI = FTI->substGenericArgs(M, M.getSwiftModule(), subs);
+    FTI = FTI->substGenericArgs(M, subs);
   
   assert(!FTI->isPolymorphic()
          && "must provide substitutions for generic partial_apply");
@@ -51,7 +61,7 @@ SILType SILBuilder::getPartialApplyResultType(SILType origTy, unsigned argCount,
   // If the original method has an @autoreleased return, the partial application
   // thunk will retain it for us, converting the return value to @owned.
   SmallVector<SILResultInfo, 4> results;
-  results.append(FTI->getAllResults().begin(), FTI->getAllResults().end());
+  results.append(FTI->getResults().begin(), FTI->getResults().end());
   for (auto &result : results) {
     if (result.getConvention() == ResultConvention::UnownedInnerPointer)
       result = SILResultInfo(result.getType(), ResultConvention::Unowned);
@@ -147,19 +157,38 @@ SILBasicBlock *SILBuilder::splitBlockForFallthrough() {
   return NewBB;
 }
 
+static bool setAccessToDeinit(BeginAccessInst *beginAccess) {
+  // It's possible that AllocBoxToStack could catch some cases that
+  // AccessEnforcementSelection does not promote to [static]. Ultimately, this
+  // should be an assert, but only after we the two passes can be fixes to share
+  // a common analysis.
+  if (beginAccess->getEnforcement() == SILAccessEnforcement::Dynamic)
+    return false;
+
+  beginAccess->setAccessKind(SILAccessKind::Deinit);
+  return true;
+}
+
 PointerUnion<CopyAddrInst *, DestroyAddrInst *>
 SILBuilder::emitDestroyAddr(SILLocation Loc, SILValue Operand) {
   // Check to see if the instruction immediately before the insertion point is a
   // copy_addr from the specified operand.  If so, we can fold this into the
   // copy_addr as a take.
+  BeginAccessInst *beginAccess = nullptr;
   auto I = getInsertionPoint(), BBStart = getInsertionBB()->begin();
   while (I != BBStart) {
     auto *Inst = &*--I;
 
     if (auto CA = dyn_cast<CopyAddrInst>(Inst)) {
-      if (CA->getSrc() == Operand && !CA->isTakeOfSrc()) {
-        CA->setIsTakeOfSrc(IsTake);
-        return CA;
+      if (!CA->isTakeOfSrc()) {
+        if (CA->getSrc() == Operand && !CA->isTakeOfSrc()) {
+          CA->setIsTakeOfSrc(IsTake);
+          return CA;
+        }
+        if (CA->getSrc() == beginAccess && setAccessToDeinit(beginAccess)) {
+          CA->setIsTakeOfSrc(IsTake);
+          return CA;
+        }
       }
     }
 
@@ -167,6 +196,15 @@ SILBuilder::emitDestroyAddr(SILLocation Loc, SILValue Operand) {
     // affect take-ability.
     if (isa<DeallocStackInst>(Inst))
       continue;
+
+    // An end_access of the same address may be able to be rewritten as a
+    // [deinit] access.
+    if (auto endAccess = dyn_cast<EndAccessInst>(Inst)) {
+      if (endAccess->getSource() == Operand) {
+        beginAccess = endAccess->getBeginAccess();
+        continue;
+      }
+    }
 
     // This code doesn't try to prove tricky validity constraints about whether
     // it is safe to push the destroy_addr past interesting instructions.
@@ -245,7 +283,7 @@ SILBuilder::emitStrongRelease(SILLocation Loc, SILValue Operand) {
   }
 
   // If we didn't find a retain to fold this into, emit the release.
-  return createStrongRelease(Loc, Operand, Atomicity::Atomic);
+  return createStrongRelease(Loc, Operand, getDefaultAtomicity());
 }
 
 /// Emit a release_value instruction at the current location, attempting to
@@ -272,7 +310,7 @@ SILBuilder::emitReleaseValue(SILLocation Loc, SILValue Operand) {
   }
 
   // If we didn't find a retain to fold this into, emit the release.
-  return createReleaseValue(Loc, Operand, Atomicity::Atomic);
+  return createReleaseValue(Loc, Operand, getDefaultAtomicity());
 }
 
 PointerUnion<CopyValueInst *, DestroyValueInst *>
@@ -333,4 +371,41 @@ SILValue SILBuilder::emitObjCToThickMetatype(SILLocation Loc, SILValue Op,
 
   // Just create the objc_to_thick_metatype instruction.
   return createObjCToThickMetatype(Loc, Op, Ty);
+}
+
+/// Add opened archetypes defined or used by the current instruction.
+/// If there are no such opened archetypes in the current instruction
+/// and it is an instruction with just one operand, try to perform
+/// the same action for the instruction defining an operand, because
+/// it may have some opened archetypes used or defined.
+void SILBuilder::addOpenedArchetypeOperands(SILInstruction *I) {
+  // The list of archetypes from the previous instruction needs
+  // to be replaced, because it may reference a removed instruction.
+  OpenedArchetypes.addOpenedArchetypeOperands(I->getTypeDependentOperands());
+  if (I && I->getNumTypeDependentOperands() > 0)
+    return;
+
+  while (I && I->getNumOperands() == 1 &&
+         I->getNumTypeDependentOperands() == 0) {
+    I = dyn_cast<SILInstruction>(I->getOperand(0));
+    if (!I)
+      return;
+    // If it is a definition of an opened archetype,
+    // register it and exit.
+    auto Archetype = getOpenedArchetypeOf(I);
+    if (!Archetype)
+      continue;
+    auto Def = OpenedArchetypes.getOpenedArchetypeDef(Archetype);
+    // Return if it is a known open archetype.
+    if (Def)
+      return;
+    // Otherwise register it and return.
+    if (OpenedArchetypesTracker)
+      OpenedArchetypesTracker->addOpenedArchetypeDef(Archetype, I);
+    return;
+  }
+
+  if (I && I->getNumTypeDependentOperands() > 0) {
+    OpenedArchetypes.addOpenedArchetypeOperands(I->getTypeDependentOperands());
+  }
 }

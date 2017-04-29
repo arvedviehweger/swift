@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,8 +14,11 @@
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
 #include "swift/SIL/SILVisitor.h"
+#include "llvm/ADT/Statistic.h"
 
 using namespace swift;
+
+STATISTIC(NumInstsEliminated, "Number of instructions eliminated");
 
 namespace {
 
@@ -32,8 +35,7 @@ struct GuaranteedARCOptsVisitor
 
 static SILBasicBlock::reverse_iterator
 getPrevReverseIterator(SILInstruction *I) {
-  auto Iter = std::next(I->getIterator());
-  return std::next(SILBasicBlock::reverse_iterator(Iter));
+  return std::next(I->getIterator().getReverse());
 }
 
 bool GuaranteedARCOptsVisitor::visitDestroyAddrInst(DestroyAddrInst *DAI) {
@@ -48,6 +50,7 @@ bool GuaranteedARCOptsVisitor::visitDestroyAddrInst(DestroyAddrInst *DAI) {
       if (CA->getSrc() == Operand && !CA->isTakeOfSrc()) {
         CA->setIsTakeOfSrc(IsTake);
         DAI->eraseFromParent();
+        NumInstsEliminated += 2;
         return true;
       }
     }
@@ -108,6 +111,7 @@ bool GuaranteedARCOptsVisitor::visitStrongReleaseInst(StrongReleaseInst *SRI) {
   // Release on a functionref is a noop.
   if (isa<FunctionRefInst>(Operand)) {
     SRI->eraseFromParent();
+    ++NumInstsEliminated;
     return true;
   }
 
@@ -122,6 +126,7 @@ bool GuaranteedARCOptsVisitor::visitStrongReleaseInst(StrongReleaseInst *SRI) {
       if (SRA->getOperand() == Operand) {
         SRA->eraseFromParent();
         SRI->eraseFromParent();
+        NumInstsEliminated += 2;
         return true;
       }
       // Skip past unrelated retains.
@@ -149,6 +154,7 @@ bool GuaranteedARCOptsVisitor::visitDestroyValueInst(DestroyValueInst *DVI) {
         CVI->replaceAllUsesWith(CVI->getOperand());
         CVI->eraseFromParent();
         DVI->eraseFromParent();
+        NumInstsEliminated += 2;
         return true;
       }
       // Skip past unrelated retains.
@@ -175,6 +181,7 @@ bool GuaranteedARCOptsVisitor::visitReleaseValueInst(ReleaseValueInst *RVI) {
       if (SRA->getOperand() == Operand) {
         SRA->eraseFromParent();
         RVI->eraseFromParent();
+        NumInstsEliminated += 2;
         return true;
       }
       // Skip past unrelated retains.
@@ -214,11 +221,9 @@ struct GuaranteedARCOpts : SILFunctionTransform {
       invalidateAnalysis(SILAnalysis::InvalidationKind::Instructions);
     }
   }
-
-  StringRef getName() override { return "Guaranteed ARC Opts"; }
 };
 
-} // end swift namespace
+} // end anonymous namespace
 
 SILTransform *swift::createGuaranteedARCOpts() {
   return new GuaranteedARCOpts();

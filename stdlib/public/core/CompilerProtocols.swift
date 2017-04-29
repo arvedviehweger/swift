@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -61,7 +61,7 @@
 /// `OptionSet` protocol. Whether using an option set or creating your own,
 /// you use the raw value of an option set instance to store the instance's
 /// bitfield. The raw value must therefore be of a type that conforms to the
-/// `BitwiseOperations` protocol, such as `UInt8` or `Int`. For example, the
+/// `FixedWidthInteger` protocol, such as `UInt8` or `Int`. For example, the
 /// `Direction` type defines an option set for the four directions you can
 /// move in a game.
 ///
@@ -99,7 +99,7 @@
 ///     print(allowedMoves.rawValue & Directions.right.rawValue)
 ///     // Prints "0"
 ///
-/// - SeeAlso: `OptionSet`, `BitwiseOperations`
+/// - SeeAlso: `OptionSet`, `FixedWidthInteger`
 public protocol RawRepresentable {
   /// The raw type that can be used to represent all values of the conforming
   /// type.
@@ -217,7 +217,7 @@ public protocol _ExpressibleByBuiltinIntegerLiteral {
 /// To add `ExpressibleByIntegerLiteral` conformance to your custom type,
 /// implement the required initializer.
 public protocol ExpressibleByIntegerLiteral {
-  /// A type that can represent an integer literal.
+  /// A type that represents an integer literal.
   ///
   /// The standard library integer and floating-point types are all valid types
   /// for `IntegerLiteralType`.
@@ -260,7 +260,7 @@ public protocol _ExpressibleByBuiltinFloatLiteral {
 /// To add `ExpressibleByFloatLiteral` conformance to your custom type,
 /// implement the required initializer.
 public protocol ExpressibleByFloatLiteral {
-  /// A type that can represent a floating-point literal.
+  /// A type that represents a floating-point literal.
   ///
   /// Valid types for `FloatLiteralType` are `Float`, `Double`, and `Float80`
   /// where available.
@@ -295,7 +295,7 @@ public protocol _ExpressibleByBuiltinBooleanLiteral {
 /// implement the `init(booleanLiteral:)` initializer that creates an instance
 /// of your type with the given Boolean value.
 public protocol ExpressibleByBooleanLiteral {
-  /// A type that can represent a Boolean literal, such as `Bool`.
+  /// A type that represents a Boolean literal, such as `Bool`.
   associatedtype BooleanLiteralType : _ExpressibleByBuiltinBooleanLiteral
 
   /// Creates an instance initialized to the given Boolean value.
@@ -335,10 +335,10 @@ public protocol _ExpressibleByBuiltinUnicodeScalarLiteral {
 /// To add `ExpressibleByUnicodeScalarLiteral` conformance to your custom type,
 /// implement the required initializer.
 public protocol ExpressibleByUnicodeScalarLiteral {
-  /// A type that can represent a Unicode scalar literal.
+  /// A type that represents a Unicode scalar literal.
   ///
   /// Valid types for `UnicodeScalarLiteralType` are `UnicodeScalar`,
-  /// `String`, and `StaticString`.
+  /// `Character`, `String`, and `StaticString`.
   associatedtype UnicodeScalarLiteralType : _ExpressibleByBuiltinUnicodeScalarLiteral
 
   /// Creates an instance initialized to the given value.
@@ -382,7 +382,7 @@ public protocol _ExpressibleByBuiltinExtendedGraphemeClusterLiteral
 public protocol ExpressibleByExtendedGraphemeClusterLiteral
   : ExpressibleByUnicodeScalarLiteral {
 
-  /// A type that can represent an extended grapheme cluster literal.
+  /// A type that represents an extended grapheme cluster literal.
   ///
   /// Valid types for `ExtendedGraphemeClusterLiteralType` are `Character`,
   /// `String`, and `StaticString`.
@@ -393,6 +393,15 @@ public protocol ExpressibleByExtendedGraphemeClusterLiteral
   ///
   /// - Parameter value: The value of the new instance.
   init(extendedGraphemeClusterLiteral value: ExtendedGraphemeClusterLiteralType)
+}
+
+extension ExpressibleByExtendedGraphemeClusterLiteral
+  where ExtendedGraphemeClusterLiteralType == UnicodeScalarLiteralType {
+
+  @_transparent
+  public init(unicodeScalarLiteral value: ExtendedGraphemeClusterLiteralType) {
+    self.init(extendedGraphemeClusterLiteral: value)
+  }
 }
 
 public protocol _ExpressibleByBuiltinStringLiteral
@@ -412,6 +421,18 @@ public protocol _ExpressibleByBuiltinUTF16StringLiteral
     utf16CodeUnitCount: Builtin.Word)
 }
 
+public protocol _ExpressibleByBuiltinConstStringLiteral
+  : _ExpressibleByBuiltinExtendedGraphemeClusterLiteral {
+
+  init(_builtinConstStringLiteral constantString: Builtin.RawPointer)
+}
+
+public protocol _ExpressibleByBuiltinConstUTF16StringLiteral
+  : _ExpressibleByBuiltinConstStringLiteral {
+
+  init(_builtinConstUTF16StringLiteral constantUTF16String: Builtin.RawPointer)
+}
+
 /// A type that can be initialized with a string literal.
 ///
 /// The `String` and `StaticString` types conform to the
@@ -427,10 +448,8 @@ public protocol _ExpressibleByBuiltinUTF16StringLiteral
 /// implement the required initializer.
 public protocol ExpressibleByStringLiteral
   : ExpressibleByExtendedGraphemeClusterLiteral {
-  // FIXME: when we have default function implementations in protocols, provide
-  // an implementation of init(extendedGraphemeClusterLiteral:).
   
-  /// A type that can represent a string literal.
+  /// A type that represents a string literal.
   ///
   /// Valid types for `StringLiteralType` are `String` and `StaticString`.
   associatedtype StringLiteralType : _ExpressibleByBuiltinStringLiteral
@@ -439,6 +458,15 @@ public protocol ExpressibleByStringLiteral
   ///
   /// - Parameter value: The value of the new instance.
   init(stringLiteral value: StringLiteralType)
+}
+
+extension ExpressibleByStringLiteral
+  where StringLiteralType == ExtendedGraphemeClusterLiteralType {
+
+  @_transparent
+  public init(extendedGraphemeClusterLiteral value: StringLiteralType) {
+    self.init(stringLiteral: value)
+  }
 }
 
 /// A type that can be initialized using an array literal.
@@ -704,21 +732,34 @@ public protocol _ExpressibleByStringInterpolation {
   init<T>(stringInterpolationSegment expr: T)
 }
 
-/// Conforming types can be initialized with color literals (e.g.
+/// A type that can be initialized using a color literal (e.g.
 /// `#colorLiteral(red: 1, green: 0, blue: 0, alpha: 1)`).
 public protocol _ExpressibleByColorLiteral {
+  /// Creates an instance initialized with the given properties of a color
+  /// literal.
+  ///
+  /// Do not call this initializer directly. Instead, initialize a variable or
+  /// constant using a color literal.
   init(colorLiteralRed red: Float, green: Float, blue: Float, alpha: Float)
 }
 
-/// Conforming types can be initialized with image literals (e.g.
+/// A type that can be initialized using an image literal (e.g.
 /// `#imageLiteral(resourceName: "hi.png")`).
 public protocol _ExpressibleByImageLiteral {
+  /// Creates an instance initialized with the given resource name.
+  ///
+  /// Do not call this initializer directly. Instead, initialize a variable or
+  /// constant using an image literal.
   init(imageLiteralResourceName path: String)
 }
 
-/// Conforming types can be initialized with strings (e.g.
+/// A type that can be initialized using a file reference literal (e.g.
 /// `#fileLiteral(resourceName: "resource.txt")`).
 public protocol _ExpressibleByFileReferenceLiteral {
+  /// Creates an instance initialized with the given resource name.
+  ///
+  /// Do not call this initializer directly. Instead, initialize a variable or
+  /// constant using a file reference literal.
   init(fileReferenceLiteralResourceName path: String)
 }
 

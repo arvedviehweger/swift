@@ -3,7 +3,7 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
 # See https://swift.org/LICENSE.txt for license information
@@ -93,7 +93,7 @@ def process_stack(binary, dyn_libs, stack):
         use_orig_line = True
         frame_addr = frame["framePC"]
         dynlib_fname = frame["dynlib_fname"]
-        so_addr = lldb_target.ResolveLoadAddress(frame_addr-1)
+        so_addr = lldb_target.ResolveLoadAddress(frame_addr - 1)
         sym_ctx = so_addr.GetSymbolContext(lldb.eSymbolContextEverything)
         frame_fragment = "{0: <4d} {1:20s} 0x{2:016x}".format(
             frame_idx, dynlib_fname, frame_addr)

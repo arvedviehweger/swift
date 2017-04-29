@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -44,8 +44,10 @@ WARNING(warning_parallel_execution_not_supported,none,
 
 ERROR(error_unable_to_execute_command,none,
       "unable to execute command: %0", (StringRef))
-ERROR(error_command_signalled,none,
+ERROR(error_command_signalled_without_signal_number,none,
       "%0 command failed due to signal (use -v to see invocation)", (StringRef))
+ERROR(error_command_signalled,none,
+      "%0 command failed due to signal %1 (use -v to see invocation)", (StringRef, int))
 ERROR(error_command_failed,none,
       "%0 command failed with exit code %1 (use -v to see invocation)",
       (StringRef, int))
@@ -111,6 +113,10 @@ WARNING(warn_cannot_stat_input,none,
         "unable to determine when '%0' was last modified: %1",
         (StringRef, StringRef))
 
+WARNING(warn_unable_to_load_dependencies, none,
+        "unable to load dependencies file \"%0\", disabling incremental mode",
+        (StringRef))
+
 ERROR(error_input_changed_during_build,none,
       "input file '%0' was modified during the build",
       (StringRef))
@@ -118,6 +124,12 @@ ERROR(error_input_changed_during_build,none,
 ERROR(error_conflicting_options, none,
       "conflicting options '%0' and '%1'",
       (StringRef, StringRef))
+
+WARNING(warn_ignore_embed_bitcode, none,
+        "ignoring -embed-bitcode since no object file is being generated", ())
+
+WARNING(verify_debug_info_requires_debug_option,none,
+        "ignoring '-verify-debug-info'; no debug info is being generated", ())
 
 #ifndef DIAG_NO_UNDEF
 # if defined(DIAG)

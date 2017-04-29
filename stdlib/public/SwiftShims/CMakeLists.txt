@@ -1,10 +1,10 @@
 set(sources
   AssertionReporting.h
   CoreFoundationShims.h
-  DispatchShims.h
   FoundationShims.h
   GlobalObjects.h
   HeapObject.h
+  KeyPath.h
   LibcShims.h
   RefCount.h
   RuntimeShims.h
@@ -15,21 +15,43 @@ set(sources
   UnicodeShims.h
   Visibility.h
 
+  DispatchOverlayShims.h
   ObjectiveCOverlayShims.h
   OSOverlayShims.h
   SafariServicesOverlayShims.h
   XCTestOverlayShims.h
   XPCOverlayShims.h
 
+  CoreFoundationOverlayShims.h
+  CFCharacterSetShims.h
+  CFHashingShims.h
+
+  FoundationOverlayShims.h
+  FoundationShimSupport.h
+  NSCalendarShims.h
+  NSCoderShims.h
+  NSDataShims.h
+  NSDictionaryShims.h
+  NSErrorShims.h
+  NSFileManagerShims.h
+  NSIndexSetShims.h
+  NSKeyedArchiverShims.h
+  NSLocaleShims.h
+  NSTimeZoneShims.h
+  NSUndoManagerShims.h
+
   module.modulemap
   )
 set(output_dir "${SWIFTLIB_DIR}/shims")
 
-set(commands
+add_custom_command(
+    OUTPUT "${output_dir}"
     COMMAND ${CMAKE_COMMAND} "-E" "make_directory" "${output_dir}")
 set(outputs)
 foreach(input ${sources})
-  list(APPEND commands
+  add_custom_command(
+      OUTPUT "${output_dir}/${input}"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
       COMMAND
         "${CMAKE_COMMAND}" "-E" "copy_if_different"
         "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
@@ -39,11 +61,8 @@ endforeach()
 # Put the output dir itself last so that it isn't considered the primary output.
 list(APPEND outputs "${output_dir}")
 
-add_custom_command_target(unused_var
-    ${commands}
-    CUSTOM_TARGET_NAME "copy_shim_headers"
-    OUTPUT "${outputs}"
-    DEPENDS "${sources}"
+add_custom_target("copy_shim_headers"
+    DEPENDS "${outputs}"
     COMMENT "Copying SwiftShims module to ${output_dir}")
 
 if ("${LLVM_PACKAGE_VERSION}" STREQUAL "")
@@ -79,11 +98,17 @@ else() # NOT SWIFT_BUILT_STANDALONE
   set(clang_headers_location "${LLVM_LIBRARY_DIR}/clang/${CLANG_VERSION}")
 endif()
 
+if("${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
+  set(cmake_symlink_option "copy_directory")
+else()
+  set(cmake_symlink_option "create_symlink")
+endif()
+
 add_custom_command_target(unused_var
     COMMAND
       "${CMAKE_COMMAND}" "-E" "make_directory" "${SWIFTLIB_DIR}"
     COMMAND
-      "${CMAKE_COMMAND}" "-E" "create_symlink"
+      "${CMAKE_COMMAND}" "-E" "${cmake_symlink_option}"
       "${clang_headers_location}"
       "${SWIFTLIB_DIR}/clang"
 

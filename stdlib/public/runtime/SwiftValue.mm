@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -18,9 +18,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/Runtime/Config.h"
+
+#if SWIFT_OBJC_INTEROP
 #include "SwiftObject.h"
 #include "SwiftValue.h"
 #include "swift/Basic/Lazy.h"
+#include "swift/Runtime/Casting.h"
 #include "swift/Runtime/HeapObject.h"
 #include "swift/Runtime/Metadata.h"
 #include "swift/Runtime/ObjCBridge.h"
@@ -29,10 +33,6 @@
 #include "SwiftHashableSupport.h"
 #include <objc/runtime.h>
 #include <Foundation/Foundation.h>
-
-#if !SWIFT_OBJC_INTEROP
-#error "This file should only be compiled when ObjC interop is enabled."
-#endif
 
 using namespace swift;
 using namespace swift::hashable_support;
@@ -213,8 +213,14 @@ _SwiftValue *swift::getAsSwiftValue(id object) {
 }
 
 bool
-swift::findSwiftValueConformances(const ProtocolDescriptorList &protocols,
+swift::findSwiftValueConformances(const ExistentialTypeMetadata *existentialType,
                                   const WitnessTable **tablesBuffer) {
+  // _SwiftValue never satisfies a superclass constraint.
+  if (existentialType->getSuperclassConstraint() != nullptr)
+    return false;
+
+  auto &protocols = existentialType->Protocols;
+
   Class cls = nullptr;
 
   // Note that currently we never modify tablesBuffer because
@@ -350,10 +356,21 @@ static NSString *getValueDescription(_SwiftValue *self) {
 
   // Copy the value, since it will be consumed by getSummary.
   ValueBuffer copyBuf;
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  auto copy = type->allocateBufferIn(&copyBuf);
+  type->vw_initializeWithCopy(copy, const_cast<OpaqueValue *>(value));
+#else
   auto copy = type->vw_initializeBufferWithCopy(&copyBuf,
                                               const_cast<OpaqueValue*>(value));
+#endif
+
   swift_getSummary(&tmp, copy, type);
+
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  type->deallocateBufferIn(&copyBuf);
+#else
   type->vw_deallocateBuffer(&copyBuf);
+#endif
   return convertStringToNSString(&tmp);
 }
 
@@ -380,6 +397,7 @@ static NSString *getValueDescription(_SwiftValue *self) {
 }
 
 @end
+#endif
 
 // TODO: We could pick specialized _SwiftValue subclasses for trivial types
 // or for types with known size and alignment characteristics. Probably

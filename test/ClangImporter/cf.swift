@@ -1,11 +1,11 @@
-// RUN: %target-swift-frontend -disable-objc-attr-requires-foundation-module -parse -verify -import-cf-types -I %S/Inputs/custom-modules %s
+// RUN: %target-swift-frontend -disable-objc-attr-requires-foundation-module -typecheck -verify -import-cf-types -I %S/Inputs/custom-modules %s
 
 // REQUIRES: objc_interop
 
 import CoreCooling
 import CFAndObjC
 
-func assertUnmanaged<T: AnyObject>(_ t: Unmanaged<T>) {}
+func assertUnmanaged<T>(_ t: Unmanaged<T>) {}
 func assertManaged<T: AnyObject>(_ t: T) {}
 
 func test0(_ fridge: CCRefrigerator) {
@@ -132,8 +132,8 @@ func nameCollisions() {
   cf = cfAlias // okay
 
   var otherAlias: MyProblematicAlias?
-  otherAlias = cfAlias // expected-error {{cannot assign value of type 'MyProblematicAliasRef?' to type 'MyProblematicAlias?'}}
-  cfAlias = otherAlias // expected-error {{cannot assign value of type 'MyProblematicAlias?' to type 'MyProblematicAliasRef?'}}
+  otherAlias = cfAlias // expected-error {{cannot assign value of type 'MyProblematicAliasRef?' (aka 'Optional<MyProblematicObjectRef>') to type 'MyProblematicAlias?' (aka 'Optional<Float>')}}
+  cfAlias = otherAlias // expected-error {{cannot assign value of type 'MyProblematicAlias?' (aka 'Optional<Float>') to type 'MyProblematicAliasRef?' (aka 'Optional<MyProblematicObjectRef>')}}
 
   func isOptionalFloat(_: inout Optional<Float>) {}
   isOptionalFloat(&otherAlias) // okay

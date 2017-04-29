@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -281,16 +281,19 @@ extension NSNumber
     ExpressibleByBooleanLiteral
 {
   /// Create an instance initialized to `value`.
+  @nonobjc
   public required convenience init(integerLiteral value: Int) {
     self.init(value: value)
   }
 
   /// Create an instance initialized to `value`.
+  @nonobjc
   public required convenience init(floatLiteral value: Double) {
     self.init(value: value)
   }
 
   /// Create an instance initialized to `value`.
+  @nonobjc
   public required convenience init(booleanLiteral value: Bool) {
     self.init(value: value)
   }

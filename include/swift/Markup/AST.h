@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -26,7 +26,9 @@ class MarkupASTNode;
 class Paragraph;
 class ParamField;
 class ReturnsField;
+class TagField;
 class ThrowsField;
+class LocalizationKeyField;
 
 /// The basic structure of a doc comment attached to a Swift
 /// declaration.
@@ -36,6 +38,8 @@ struct CommentParts {
   ArrayRef<ParamField *> ParamFields;
   Optional<const ReturnsField *> ReturnsField;
   Optional<const ThrowsField *> ThrowsField;
+  ArrayRef<StringRef> Tags;
+  Optional<const LocalizationKeyField *> LocalizationKeyField;
 
   bool isEmpty() const {
     return !Brief.hasValue() &&

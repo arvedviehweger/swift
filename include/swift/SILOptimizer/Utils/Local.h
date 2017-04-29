@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -110,22 +110,10 @@ SILValue isPartialApplyOfReabstractionThunk(PartialApplyInst *PAI);
 /// - a type of the return value is a subclass of the expected return type.
 /// - actual return type and expected return type differ in optionality.
 /// - both types are tuple-types and some of the elements need to be casted.
-///
-/// If CheckOnly flag is set, then this function only checks if the
-/// required casting is possible. If it is not possible, then None
-/// is returned.
-/// If CheckOnly is not set, then a casting code is generated and the final
-/// casted value is returned.
-Optional<SILValue> castValueToABICompatibleType(SILBuilder *B, SILLocation Loc,
-                                                SILValue Value,
-                                                SILType SrcTy,
-                                                SILType DestTy,
-                                                bool CheckOnly = false);
-
-/// Check if the optimizer can cast a value into the expected,
-/// ABI compatible type if necessary.
-bool canCastValueToABICompatibleType(SILModule &M,
-                                     SILType SrcTy, SILType DestTy);
+SILValue castValueToABICompatibleType(SILBuilder *B, SILLocation Loc,
+                                      SILValue Value,
+                                      SILType SrcTy,
+                                      SILType DestTy);
 
 /// Returns a project_box if it is the next instruction after \p ABI and
 /// and has \p ABI as operand. Otherwise it creates a new project_box right
@@ -137,21 +125,9 @@ ProjectBoxInst *getOrCreateProjectBox(AllocBoxInst *ABI, unsigned Index);
 /// if possible.
 void replaceDeadApply(ApplySite Old, ValueBase *New);
 
-/// \brief Return true if the substitution map contains a
-/// substitution that is an unbound generic type.
-bool hasUnboundGenericTypes(const TypeSubstitutionMap &SubsMap);
-
-/// Return true if the substitution list contains a substitution
-/// that is an unbound generic.
-bool hasUnboundGenericTypes(ArrayRef<Substitution> Subs);
-
-/// \brief Return true if the substitution map contains a
-/// substitution that refers to the dynamic Self type.
-bool hasDynamicSelfTypes(const TypeSubstitutionMap &SubsMap);
-
-/// \brief Return true if the substitution list contains a
-/// substitution that refers to the dynamic Self type.
-bool hasDynamicSelfTypes(ArrayRef<Substitution> Subs);
+/// \brief Return true if the substitution list contains replacement types
+/// that are dependent on the type parameters of the caller.
+bool hasArchetypes(SubstitutionList Subs);
 
 /// \brief Return true if any call inside the given function may bind dynamic
 /// 'Self' to a generic argument of the callee.
@@ -301,6 +277,11 @@ private:
 
   /// Returns the last use of the value in the live block \p BB.
   SILInstruction *findLastUserInBlock(SILBasicBlock *BB);
+
+  /// Returns true if the value is alive at the begin of block \p BB.
+  bool isAliveAtBeginOfBlock(SILBasicBlock *BB) {
+    return LiveBlocks.count(BB) && BB != DefValue->getParentBlock();
+  }
 };
 
 /// Base class for BB cloners.
@@ -371,15 +352,14 @@ public:
     auto *EdgeBB = Fn->createBasicBlock(SrcBB);
 
     // Create block arguments.
-    unsigned ArgIdx = 0;
-    for (auto Arg : BI->getArgs()) {
-      assert(Arg->getType() == DestBB->getArgument(ArgIdx)->getType() &&
+    for (unsigned ArgIdx : range(DestBB->getNumArguments())) {
+      auto *DestPHIArg = cast<SILPHIArgument>(DestBB->getArgument(ArgIdx));
+      assert(BI->getArg(ArgIdx)->getType() == DestPHIArg->getType() &&
              "Types must match");
-      auto *BlockArg = EdgeBB->createArgument(Arg->getType());
-      ValueMap[DestBB->getArgument(ArgIdx)] = SILValue(BlockArg);
-      AvailVals.push_back(
-          std::make_pair(DestBB->getArgument(ArgIdx), BlockArg));
-      ++ArgIdx;
+      auto *BlockArg = EdgeBB->createPHIArgument(
+          DestPHIArg->getType(), DestPHIArg->getOwnershipKind());
+      ValueMap[DestPHIArg] = SILValue(BlockArg);
+      AvailVals.push_back(std::make_pair(DestPHIArg, BlockArg));
     }
 
     // Redirect the branch.
@@ -407,9 +387,7 @@ class BasicBlockCloner : public BaseThreadingCloner {
         // Create a new BB that is to be used as a target
         // for cloning.
         To = From->getParent()->createBasicBlock();
-        for (auto *Arg : FromBB->getArguments()) {
-          To->createArgument(Arg->getType(), Arg->getDecl());
-        }
+        To->cloneArgumentList(From);
       }
       DestBB = To;
 
@@ -509,6 +487,10 @@ public:
   SILInstruction *
   simplifyCheckedCastBranchInst(CheckedCastBranchInst *Inst);
 
+  /// Simplify checked_cast_value_br. It may change the control flow.
+  SILInstruction *
+  simplifyCheckedCastValueBranchInst(CheckedCastValueBranchInst *Inst);
+
   /// Simplify checked_cast_addr_br. It may change the control flow.
   SILInstruction *
   simplifyCheckedCastAddrBranchInst(CheckedCastAddrBranchInst *Inst);
@@ -516,6 +498,10 @@ public:
   /// Optimize checked_cast_br. This cannot change the control flow.
   SILInstruction *
   optimizeCheckedCastBranchInst(CheckedCastBranchInst *Inst);
+
+  /// Optimize checked_cast_value_br. This cannot change the control flow.
+  SILInstruction *
+  optimizeCheckedCastValueBranchInst(CheckedCastValueBranchInst *Inst);
 
   /// Optimize checked_cast_addr_br. This cannot change the control flow.
   SILInstruction *

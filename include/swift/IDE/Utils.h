@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,6 +14,7 @@
 #define SWIFT_IDE_UTILS_H
 
 #include "swift/Basic/LLVM.h"
+#include "swift/AST/ASTNode.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ASTPrinter.h"
 #include "swift/AST/SourceEntityWalker.h"
@@ -59,7 +60,7 @@ struct SourceCompleteResult {
   // prefix will contain the leading space characters of the line that
   // contained the '{', '(' or '[' character that was unbalanced.
   std::string IndentPrefix;
-  // Returns the indent level as an indentation count (number of indentations 
+  // Returns the indent level as an indentation count (number of indentations
   // to apply). Clients can translate this into the standard indentation that
   // is being used by the IDE (3 spaces? 1 tab?) and should use the indent
   // prefix string followed by the correct indentation.
@@ -142,9 +143,18 @@ class XMLEscapingPrinter : public StreamPrinter {
   void printXML(StringRef Text);
 };
 
+enum class SemaTokenKind {
+  Invalid,
+  ValueRef,
+  ModuleRef,
+  StmtStart,
+};
+
 struct SemaToken {
+  SemaTokenKind Kind = SemaTokenKind::Invalid;
   ValueDecl *ValueD = nullptr;
   TypeDecl *CtorTyRef = nullptr;
+  ExtensionDecl *ExtTyRef = nullptr;
   ModuleEntity Mod;
   SourceLoc Loc;
   bool IsRef = true;
@@ -152,16 +162,20 @@ struct SemaToken {
   Type Ty;
   DeclContext *DC = nullptr;
   Type ContainerType;
+  Stmt *TrailingStmt = nullptr;
 
   SemaToken() = default;
-  SemaToken(ValueDecl *ValueD, TypeDecl *CtorTyRef, SourceLoc Loc, bool IsRef,
-            Type Ty, Type ContainerType) : ValueD(ValueD), CtorTyRef(CtorTyRef), Loc(Loc),
-            IsRef(IsRef), Ty(Ty), DC(ValueD->getDeclContext()),
-            ContainerType(ContainerType) {}
-  SemaToken(ModuleEntity Mod, SourceLoc Loc) : Mod(Mod), Loc(Loc) { }
-
-  bool isValid() const { return ValueD != nullptr || Mod; }
-  bool isInvalid() const { return !isValid(); }
+  SemaToken(ValueDecl *ValueD, TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef,
+            SourceLoc Loc, bool IsRef, Type Ty, Type ContainerType) :
+            Kind(SemaTokenKind::ValueRef), ValueD(ValueD), CtorTyRef(CtorTyRef),
+            ExtTyRef(ExtTyRef), Loc(Loc), IsRef(IsRef), Ty(Ty),
+            DC(ValueD->getDeclContext()), ContainerType(ContainerType) {}
+  SemaToken(ModuleEntity Mod, SourceLoc Loc) : Kind(SemaTokenKind::ModuleRef),
+                                               Mod(Mod), Loc(Loc) { }
+  SemaToken(Stmt *TrailingStmt) : Kind(SemaTokenKind::StmtStart),
+                                  TrailingStmt(TrailingStmt) {}
+  bool isValid() const { return !isInvalid(); }
+  bool isInvalid() const { return Kind == SemaTokenKind::Invalid; }
 };
 
 class SemaLocResolver : public SourceEntityWalker {
@@ -181,7 +195,8 @@ private:
   bool walkToStmtPre(Stmt *S) override;
   bool walkToStmtPost(Stmt *S) override;
   bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                          TypeDecl *CtorTyRef, Type T) override;
+                          TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef, Type T,
+                          ReferenceMetaData Data) override;
   bool visitCallArgName(Identifier Name, CharSourceRange Range,
                         ValueDecl *D) override;
   bool visitModuleReference(ModuleEntity Mod, CharSourceRange Range) override;
@@ -189,9 +204,10 @@ private:
     return getSourceMgr().rangeContainsTokenLoc(Range, LocToResolve);
   }
   bool isDone() const { return SemaTok.isValid(); }
-  bool tryResolve(ValueDecl *D, TypeDecl *CtorTyRef,
+  bool tryResolve(ValueDecl *D, TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef,
                   SourceLoc Loc, bool IsRef, Type Ty = Type());
   bool tryResolve(ModuleEntity Mod, SourceLoc Loc);
+  bool tryResolve(Stmt *St);
   bool visitSubscriptReference(ValueDecl *D, CharSourceRange Range,
                                bool IsOpenBracket) override;
 };
@@ -205,13 +221,55 @@ enum class RangeKind : int8_t{
   MultiStatement,
 };
 
+struct DeclaredDecl {
+  ValueDecl *VD;
+  bool ReferredAfterRange;
+  DeclaredDecl(ValueDecl* VD) : VD(VD), ReferredAfterRange(false) {}
+  DeclaredDecl(): DeclaredDecl(nullptr) {}
+  bool operator==(const DeclaredDecl& other);
+};
+
+struct ReferencedDecl {
+  ValueDecl *VD;
+  Type Ty;
+  ReferencedDecl(ValueDecl* VD, Type Ty) : VD(VD), Ty(Ty) {}
+  ReferencedDecl() : ReferencedDecl(nullptr, Type()) {}
+};
+
+enum class OrphanKind : int8_t {
+  None,
+  Break,
+  Continue,
+};
 struct ResolvedRangeInfo {
   RangeKind Kind;
   Type Ty;
   StringRef Content;
-  ResolvedRangeInfo(RangeKind Kind, Type Ty, StringRef Content): Kind(Kind),
-    Ty(Ty), Content(Content) {}
-  ResolvedRangeInfo(): ResolvedRangeInfo(RangeKind::Invalid, Type(), StringRef()) {}
+  bool HasSingleEntry;
+  bool ThrowingUnhandledError;
+  OrphanKind Orphan;
+
+  // The topmost ast nodes contained in the given range.
+  ArrayRef<ASTNode> ContainedNodes;
+  ArrayRef<DeclaredDecl> DeclaredDecls;
+  ArrayRef<ReferencedDecl> ReferencedDecls;
+  DeclContext* RangeContext;
+  ResolvedRangeInfo(RangeKind Kind, Type Ty, StringRef Content,
+                    DeclContext* RangeContext,
+                    bool HasSingleEntry, bool ThrowingUnhandledError,
+                    OrphanKind Orphan, ArrayRef<ASTNode> ContainedNodes,
+                    ArrayRef<DeclaredDecl> DeclaredDecls,
+                    ArrayRef<ReferencedDecl> ReferencedDecls): Kind(Kind),
+                      Ty(Ty), Content(Content), HasSingleEntry(HasSingleEntry),
+                      ThrowingUnhandledError(ThrowingUnhandledError),
+                      Orphan(Orphan), ContainedNodes(ContainedNodes),
+                      DeclaredDecls(DeclaredDecls),
+                      ReferencedDecls(ReferencedDecls),
+                      RangeContext(RangeContext) {}
+  ResolvedRangeInfo(StringRef Content) :
+  ResolvedRangeInfo(RangeKind::Invalid, Type(), Content, nullptr,
+                    /*Single entry*/true, /*unhandled error*/false,
+                    OrphanKind::None, {}, {}, {}) {}
   void print(llvm::raw_ostream &OS);
 };
 
@@ -224,14 +282,135 @@ class RangeResolver : public SourceEntityWalker {
   bool walkToStmtPost(Stmt *S) override;
   bool walkToDeclPre(Decl *D, CharSourceRange Range) override;
   bool walkToDeclPost(Decl *D) override;
+  bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
+                          TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef, Type T,
+                          ReferenceMetaData Data) override;
 public:
   RangeResolver(SourceFile &File, SourceLoc Start, SourceLoc End);
   RangeResolver(SourceFile &File, unsigned Offset, unsigned Length);
   ResolvedRangeInfo resolve();
   ~RangeResolver();
 };
-} // namespace ide
 
+/// This provides a utility to view a printed name by parsing the components
+/// of that name. The components include a base name and an array of argument
+/// labels.
+class DeclNameViewer {
+  StringRef BaseName;
+  SmallVector<StringRef, 4> Labels;
+public:
+  DeclNameViewer(StringRef Text);
+  DeclNameViewer() : DeclNameViewer(StringRef()) {}
+  operator bool() const { return !BaseName.empty(); }
+  StringRef base() const { return BaseName; }
+  llvm::ArrayRef<StringRef> args() const { return llvm::makeArrayRef(Labels); }
+  unsigned argSize() const { return Labels.size(); }
+  unsigned partsCount() const { return 1 + Labels.size(); }
+  unsigned commonPartsCount(DeclNameViewer &Other) const;
+};
+
+/// This provide a utility for writing to an underlying string buffer multiple
+/// string pieces and retrieve them later when the underlying buffer is stable.
+class DelayedStringRetriever : public raw_ostream {
+    SmallVectorImpl<char> &OS;
+    llvm::raw_svector_ostream Underlying;
+    SmallVector<std::pair<unsigned, unsigned>, 4> StartEnds;
+    unsigned CurrentStart;
+
+public:
+    explicit DelayedStringRetriever(SmallVectorImpl<char> &OS) : OS(OS),
+                                                              Underlying(OS) {}
+    void startPiece() {
+      CurrentStart = OS.size();
+    }
+    void endPiece() {
+      StartEnds.emplace_back(CurrentStart, OS.size());
+    }
+    void write_impl(const char *ptr, size_t size) override {
+      Underlying.write(ptr, size);
+    }
+    uint64_t current_pos() const override {
+      return Underlying.tell();
+    }
+    size_t preferred_buffer_size() const override {
+      return 0;
+    }
+    void retrieve(llvm::function_ref<void(StringRef)> F) const {
+      for (auto P : StartEnds) {
+        F(StringRef(OS.begin() + P.first, P.second - P.first));
+      }
+    }
+    StringRef operator[](unsigned I) const {
+      auto P = StartEnds[I];
+      return StringRef(OS.begin() + P.first, P.second - P.first);
+    }
+};
+
+enum class RegionType {
+  Unmatched,
+  Mismatch,
+  ActiveCode,
+  InactiveCode,
+  String,
+  Selector,
+  Comment,
+};
+
+enum class NoteRegionKind {
+  BaseName,
+};
+
+struct NoteRegion {
+  NoteRegionKind Kind;
+  unsigned Offset;
+  unsigned Length;
+};
+
+struct Replacement {
+  CharSourceRange Range;
+  StringRef Text;
+  ArrayRef<NoteRegion> RegionsWorthNote;
+};
+
+class SourceEditConsumer {
+public:
+  virtual void accept(SourceManager &SM, RegionType RegionType, ArrayRef<Replacement> Replacements) = 0;
+  virtual ~SourceEditConsumer() = default;
+  void accept(SourceManager &SM, CharSourceRange Range, StringRef Text, ArrayRef<NoteRegion> SubRegions = {});
+  void accept(SourceManager &SM, SourceLoc Loc, StringRef Text, ArrayRef<NoteRegion> SubRegions = {});
+  void insertAfter(SourceManager &SM, SourceLoc Loc, StringRef Text, ArrayRef<NoteRegion> SubRegions = {});
+  void accept(SourceManager &SM, Replacement Replacement) { accept(SM, RegionType::ActiveCode, {Replacement}); }
+};
+
+class SourceEditJsonConsumer : public SourceEditConsumer {
+  struct Implementation;
+  Implementation &Impl;
+public:
+  SourceEditJsonConsumer(llvm::raw_ostream &OS);
+  ~SourceEditJsonConsumer();
+  void accept(SourceManager &SM, RegionType RegionType, ArrayRef<Replacement> Replacements) override;
+};
+
+class SourceEditOutputConsumer : public SourceEditConsumer {
+  struct Implementation;
+  Implementation &Impl;
+
+public:
+  SourceEditOutputConsumer(SourceManager &SM, unsigned BufferId, llvm::raw_ostream &OS);
+  ~SourceEditOutputConsumer();
+  void accept(SourceManager &SM, RegionType RegionType, ArrayRef<Replacement> Replacements) override;
+};
+
+enum class LabelRangeEndAt: int8_t {
+  BeforeElemStart,
+  LabelNameOnly,
+};
+
+// Get the ranges of argument labels from an Arg, either tuple or paren.
+std::vector<CharSourceRange>
+getCallArgLabelRanges(SourceManager &SM, Expr *Arg, LabelRangeEndAt EndKind);
+
+} // namespace ide
 } // namespace swift
 
 #endif // SWIFT_IDE_UTILS_H

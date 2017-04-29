@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -20,6 +20,7 @@
 #define SWIFT_ABI_METADATAVALUES_H
 
 #include "swift/AST/Ownership.h"
+#include "swift/Runtime/Unreachable.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -379,6 +380,8 @@ public:
     case ProtocolDispatchStrategy::Swift:
       return true;
     }
+
+    swift_runtime_unreachable("Unhandled ProtocolDispatchStrategy in switch.");
   }
   
   /// Return the identifier if this is a special runtime-known protocol.
@@ -401,7 +404,8 @@ class ExistentialTypeFlags {
   enum : int_type {
     NumWitnessTablesMask  = 0x00FFFFFFU,
     ClassConstraintMask   = 0x80000000U,
-    SpecialProtocolMask   = 0x7F000000U,
+    HasSuperclassMask     = 0x40000000U,
+    SpecialProtocolMask   = 0x3F000000U,
     SpecialProtocolShift  = 24U,
   };
   int_type Data;
@@ -418,6 +422,11 @@ public:
                                   | (bool(c) ? ClassConstraintMask : 0));
   }
   constexpr ExistentialTypeFlags
+  withHasSuperclass(bool hasSuperclass) const {
+    return ExistentialTypeFlags((Data & ~HasSuperclassMask)
+                                  | (hasSuperclass ? HasSuperclassMask : 0));
+  }
+  constexpr ExistentialTypeFlags
   withSpecialProtocol(SpecialProtocol sp) const {
     return ExistentialTypeFlags((Data & ~SpecialProtocolMask)
                                   | (int_type(sp) << SpecialProtocolShift));
@@ -430,7 +439,11 @@ public:
   ProtocolClassConstraint getClassConstraint() const {
     return ProtocolClassConstraint(bool(Data & ClassConstraintMask));
   }
-  
+
+  bool hasSuperclassConstraint() const {
+    return bool(Data & HasSuperclassMask);
+  }
+
   /// Return whether this existential type represents an uncomposed special
   /// protocol.
   SpecialProtocol getSpecialProtocol() const {
@@ -560,6 +573,17 @@ public:
   }
 };
 
+/// Flags for exclusivity-checking operations.
+enum class ExclusivityFlags : uintptr_t {
+  Read             = 0x0,
+  Modify           = 0x1,
+  ActionMask       = 0x1
+};
+static inline ExclusivityFlags getAccessAction(ExclusivityFlags flags) {
+  return ExclusivityFlags(uintptr_t(flags)
+                        & uintptr_t(ExclusivityFlags::ActionMask));
 }
+
+} // end namespace swift
 
 #endif /* SWIFT_ABI_METADATAVALUES_H */

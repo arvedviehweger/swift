@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -52,20 +52,16 @@ void CaptureInfo::print(raw_ostream &OS) const {
   if (hasDynamicSelfCapture())
     OS << "<dynamic_self> ";
 
-  bool isFirst = true;
-  
-  for (auto capture : getCaptures()) {
-    if (isFirst)
-      isFirst = false;
-    else
-      OS << ", ";
-    OS << capture.getDecl()->getName();
-    
-    if (capture.isDirect())
-      OS << "<direct>";
-    if (capture.isNoEscape())
-      OS << "<noescape>";
-  }
+  interleave(getCaptures(),
+             [&](const CapturedValue &capture) {
+               OS << capture.getDecl()->getName();
+
+               if (capture.isDirect())
+                 OS << "<direct>";
+               if (capture.isNoEscape())
+                 OS << "<noescape>";
+             },
+             [&] { OS << ", "; });
   OS << ')';
 }
 

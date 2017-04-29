@@ -680,8 +680,9 @@ StringTests.test("COW/replaceSubrange/end") {
 }
 
 func asciiString<
-  S: Sequence where S.Iterator.Element == Character
->(_ content: S) -> String {
+  S: Sequence
+>(_ content: S) -> String
+where S.Iterator.Element == Character {
   var s = String()
   s.append(contentsOf: content)
   expectEqual(1, s._core.elementWidth)
@@ -1248,12 +1249,11 @@ StringTests.test("String.append(_: Character)") {
 
 internal func decodeCString<
   C : UnicodeCodec
-  where
-  C.CodeUnit : UnsignedInteger
 >(_ s: String, as codec: C.Type)
-  -> (result: String, repairsMade: Bool)? {
+-> (result: String, repairsMade: Bool)?
+where C.CodeUnit : FixedWidthInteger {
   let units = s.unicodeScalars.map({ $0.value }) + [0]
-  return units.map({ C.CodeUnit(numericCast($0)) }).withUnsafeBufferPointer {
+  return units.map({ C.CodeUnit($0) }).withUnsafeBufferPointer {
     String.decodeCString($0.baseAddress, as: C.self)
   }
 }
@@ -1452,7 +1452,7 @@ StringTests.test("String.replaceSubrange()/characters/range") {
     var theString = test.original
     let c = test.original.characters
     let rangeToReplace = test.rangeSelection.range(in: c)
-    let newCharacters : [Character] = test.newElements.characters.map { $0 }
+    let newCharacters : [Character] = Array(test.newElements.characters)
     theString.replaceSubrange(rangeToReplace, with: newCharacters)
     expectEqual(
       test.expected,

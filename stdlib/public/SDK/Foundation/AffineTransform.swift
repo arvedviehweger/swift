@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -124,8 +124,8 @@ public struct AffineTransform : ReferenceConvertible, Hashable, CustomStringConv
          [    0       0    1 ]
      */
     public init(rotationByDegrees angle: CGFloat) {
-        let α = Double(angle) * M_PI / 180.0
-        self.init(rotationByRadians: CGFloat(α))
+        let α = angle * .pi / 180.0
+        self.init(rotationByRadians: α)
     }
     
     /**
@@ -153,8 +153,8 @@ public struct AffineTransform : ReferenceConvertible, Hashable, CustomStringConv
          [    0       0    1 ]
      */
     public mutating func rotate(byDegrees angle: CGFloat) {
-        let α = Double(angle) * M_PI / 180.0
-        return rotate(byRadians: CGFloat(α))
+        let α = angle * .pi / 180.0
+        return rotate(byRadians: α)
     }
     
     /**
@@ -273,7 +273,13 @@ public struct AffineTransform : ReferenceConvertible, Hashable, CustomStringConv
     }
     
     public var hashValue : Int {
-        return Int(m11 + m12 + m21 + m22 + tX + tY)
+        // FIXME(integers): the expression was broken into pieces to speed up
+        // compilation.
+        // Used to be just: return Int(m11 + m12 + m21 + m22 + tX + tY)
+        let a: CGFloat = m11 + m12
+        let b: CGFloat = m21 + m22
+        let c: CGFloat = tX + tY
+        return Int(a + b + c)
     }
     
     public var description: String {

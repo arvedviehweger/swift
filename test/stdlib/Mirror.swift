@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -724,7 +724,7 @@ mirrors.test("PlaygroundQuickLook") {
   case .text(let text):
 #if _runtime(_ObjC)
 // FIXME: Enable if non-objc hasSuffix is implemented.
-    expectTrue(text.hasSuffix(".(X #1)()"), text)
+    expectTrue(text.contains("X #1 in"), text)
 #endif
   default:
     expectTrue(false)

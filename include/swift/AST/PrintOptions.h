@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -342,6 +342,19 @@ struct PrintOptions {
 
   bool PrintAsMember = false;
 
+  /// \see ShouldQualifyNestedDeclarations
+  enum class QualifyNestedDeclarations {
+    Never,
+    TypesOnly,
+    Always
+  };
+
+  /// Controls when a nested declaration's name should be printed qualified with
+  /// its enclosing context, if it's being printed on its own (rather than as
+  /// part of the context).
+  QualifyNestedDeclarations ShouldQualifyNestedDeclarations =
+      QualifyNestedDeclarations::Never;
+
   /// \brief If this is not \c nullptr then functions (including accessors and
   /// constructors) will be printed with a body that is determined by this
   /// function.
@@ -386,6 +399,8 @@ struct PrintOptions {
     result.PrintOverrideKeyword = false;
     result.AccessibilityFilter = Accessibility::Public;
     result.PrintIfConfig = false;
+    result.ShouldQualifyNestedDeclarations =
+        QualifyNestedDeclarations::TypesOnly;
     return result;
   }
 
@@ -400,6 +415,8 @@ struct PrintOptions {
     result.ExcludeAttrList.push_back(DAK_DiscardableResult);
     result.EmptyLineBetweenMembers = true;
     result.ElevateDocCommentFromConformance = true;
+    result.ShouldQualifyNestedDeclarations =
+        QualifyNestedDeclarations::Always;
     return result;
   }
 
@@ -455,6 +472,12 @@ struct PrintOptions {
     return result;
   }
 
+  static PrintOptions printQualifiedSILType() {
+    PrintOptions result = PrintOptions::printSIL();
+    result.FullyQualifiedTypesIfAmbiguous = true;
+    return result;
+  }
+
   /// \brief Retrieve the set of options that prints everything.
   ///
   /// This is only intended for debug output.
@@ -480,6 +503,7 @@ struct PrintOptions {
     PO.ExcludeAttrList.push_back(DAK_Available);
     PO.SkipPrivateStdlibDecls = true;
     PO.ExplodeEnumCaseDecls = true;
+    PO.ShouldQualifyNestedDeclarations = QualifyNestedDeclarations::TypesOnly;
     return PO;
   }
 };

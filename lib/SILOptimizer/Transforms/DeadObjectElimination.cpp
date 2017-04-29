@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -319,7 +319,7 @@ public:
 
   ArrayRef<IndexTrieNode*> getChildren() const { return Children; }
 };
-}
+} // end anonymous namespace
 
 namespace {
 /// Determine if an object is dead. Compute its original lifetime. Find the
@@ -378,7 +378,7 @@ private:
   template<typename Visitor>
   void visitStoreLocations(Visitor visitor, IndexTrieNode *AddressNode);
 };
-}
+} // end anonymous namespace
 
 // Record a store into this object.
 void DeadObjectAnalysis::
@@ -558,9 +558,9 @@ static void insertReleases(ArrayRef<StoreInst*> Stores,
     // can simply ask SSAUpdater for the reaching store.
     SILValue RelVal = SSAUp.GetValueAtEndOfBlock(RelPoint->getParent());
     if (StVal->getType().isReferenceCounted(RelPoint->getModule()))
-      B.createStrongRelease(Loc, RelVal, Atomicity::Atomic);
+      B.createStrongRelease(Loc, RelVal, B.getDefaultAtomicity());
     else
-      B.createReleaseValue(Loc, RelVal, Atomicity::Atomic);
+      B.createReleaseValue(Loc, RelVal, B.getDefaultAtomicity());
   }
 }
 
@@ -706,7 +706,6 @@ class DeadObjectElimination : public SILFunctionTransform {
     }
   }
 
-  StringRef getName() override { return "Dead Object Elimination"; }
 };
 } // end anonymous namespace
 

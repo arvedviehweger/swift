@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -36,6 +36,7 @@ namespace swift {
   class VarDecl;
 
 namespace irgen {
+  class ConstantStructBuilder;
   class HeapLayout;
   class IRGenFunction;
   class IRGenModule;
@@ -62,10 +63,15 @@ namespace irgen {
                                        SILType baseType, VarDecl *field);
 
 
-  std::tuple<llvm::Constant * /*classData*/,
-             llvm::Constant * /*metaclassData*/,
-             Size>
-  emitClassPrivateDataFields(IRGenModule &IGM, ClassDecl *cls);
+  enum ForMetaClass_t : bool {
+    ForClass = false,
+    ForMetaClass = true
+  };
+
+  std::pair<Size,Size>
+  emitClassPrivateDataFields(IRGenModule &IGM,
+                             ConstantStructBuilder &builder,
+                             ClassDecl *cls);
   
   llvm::Constant *emitClassPrivateData(IRGenModule &IGM, ClassDecl *theClass);
   void emitGenericClassPrivateDataTemplate(IRGenModule &IGM,
@@ -126,11 +132,17 @@ namespace irgen {
   /// correspond to the runtime alignment of instances of the class.
   llvm::Constant *tryEmitClassConstantFragileInstanceAlignMask(IRGenModule &IGM,
                                                         ClassDecl *theClass);
-  
-  /// What reference counting mechanism does a class use?
-  ReferenceCounting getReferenceCountingForClass(IRGenModule &IGM,
-                                                 ClassDecl *theClass);
-  
+  /// Emit the constant fragile offset of the given property inside an instance
+  /// of the class.
+  llvm::Constant *
+  tryEmitConstantClassFragilePhysicalMemberOffset(IRGenModule &IGM,
+                                                  SILType baseType,
+                                                  VarDecl *field);
+
+  /// What reference counting mechanism does a class-like type use?
+  ReferenceCounting getReferenceCountingForType(IRGenModule &IGM,
+                                                CanType type);
+
   /// What isa-encoding mechanism does a type use?
   IsaEncoding getIsaEncodingForType(IRGenModule &IGM, CanType type);
   
@@ -141,6 +153,14 @@ namespace irgen {
   /// the runtime?
   bool doesClassMetadataRequireDynamicInitialization(IRGenModule &IGM,
                                                      ClassDecl *theClass);
+    
+  /// Returns true if a conformance of the \p conformingType references the
+  /// nominal type descriptor of the type.
+  ///
+  /// Otherwise the conformance references the foreign metadata of the
+  /// \p conformingType.
+  bool doesConformanceReferenceNominalTypeDescriptor(IRGenModule &IGM,
+                                                     CanType conformingType);
 } // end namespace irgen
 } // end namespace swift
 

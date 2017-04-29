@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -18,6 +18,8 @@
 #ifndef SWIFT_AST_SILOPTIONS_H
 #define SWIFT_AST_SILOPTIONS_H
 
+#include "swift/Basic/Sanitizers.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
 #include <climits>
@@ -54,6 +56,11 @@ public:
 
   /// Controls how to perform SIL linking.
   LinkingMode LinkMode = LinkNormal;
+
+  /// Controls whether to pull in SIL from partial modules during the
+  /// merge modules step. Could perhaps be merged with the link mode
+  /// above but the interactions between all the flags are tricky.
+  bool MergePartialModules = false;
 
   /// Remove all runtime assertions during optimizations.
   bool RemoveRuntimeAsserts = false;
@@ -119,6 +126,40 @@ public:
 
   /// When parsing SIL, assume unqualified ownership.
   bool AssumeUnqualifiedOwnershipWhenParsing = false;
+
+  /// Assume that code will be executed in a single-threaded environment.
+  bool AssumeSingleThreaded = false;
+
+  /// Use the copy-on-write implementation for opaque existentials.
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  bool UseCOWExistentials = true;
+#else
+  bool UseCOWExistentials = false;
+#endif
+
+  /// Indicates which sanitizer is turned on.
+  SanitizerKind Sanitize : 2;
+
+  /// Emit compile-time diagnostics when the law of exclusivity is violated.
+  bool EnforceExclusivityStatic = false;
+
+  /// Suppress static diagnostics for violations of exclusive access for calls
+  /// to the Standard Library's swap() free function.
+  bool SuppressStaticExclusivitySwap = false;
+
+  /// Emit checks to trap at run time when the law of exclusivity is violated.
+  bool EnforceExclusivityDynamic = false;
+
+  /// Enable the mandatory semantic arc optimizer.
+  bool EnableMandatorySemanticARCOpts = false;
+
+  SILOptions() : Sanitize(SanitizerKind::None) {}
+
+  /// Return a hash code of any components from these options that should
+  /// contribute to a Swift Bridging PCH hash.
+  llvm::hash_code getPCHHashComponents() const {
+    return llvm::hash_value(0);
+  }
 };
 
 } // end namespace swift

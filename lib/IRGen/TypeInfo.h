@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -39,11 +39,12 @@ namespace swift {
 
 namespace irgen {
   class Address;
-  class ContainedAddress;
+  class StackAddress;
   class IRGenFunction;
   class IRGenModule;
   class Explosion;
   class ExplosionSchema;
+  class NativeConventionSchema;
   enum OnHeap_t : unsigned char;
   class OwnedAddress;
   class RValue;
@@ -89,7 +90,8 @@ protected:
            IsBitwiseTakable_t bitwiseTakable,
            IsFixedSize_t alwaysFixedSize,
            SpecialTypeInfoKind stik)
-    : NextConverted(0), StorageType(Type), StorageAlignment(A),
+    : NextConverted(0), StorageType(Type), nativeReturnSchema(nullptr),
+      nativeParameterSchema(nullptr), StorageAlignment(A),
       POD(pod), BitwiseTakable(bitwiseTakable),
       AlwaysFixedSize(alwaysFixedSize), STIK(stik),
       SubclassKind(InvalidSubclassKind) {
@@ -102,7 +104,7 @@ protected:
   }
 
 public:
-  virtual ~TypeInfo() = default;
+  virtual ~TypeInfo();
 
   /// Unsafely cast this to the given subtype.
   template <class T> const T &as() const {
@@ -114,6 +116,9 @@ private:
   /// The LLVM representation of a stored value of this type.  For
   /// non-fixed types, this is really useful only for forming pointers to it.
   llvm::Type *StorageType;
+
+  mutable NativeConventionSchema *nativeReturnSchema;
+  mutable NativeConventionSchema *nativeParameterSchema;
 
   /// The storage alignment of this type in bytes.  This is never zero
   /// for a completely-converted type.
@@ -202,6 +207,8 @@ public:
              "IsFixedSize vs IsAlwaysFixedSize mismatch");
       return IsFixedSize_t(AlwaysFixedSize);
     }
+
+    llvm_unreachable("Not a valid ResilienceExpansion.");
   }
 
   /// Whether this type is known to be loadable in the local
@@ -255,17 +262,17 @@ public:
   ExplosionSchema getSchema() const;
 
   /// Allocate a variable of this type on the stack.
-  virtual ContainedAddress allocateStack(IRGenFunction &IGF,
-                                         SILType T,
-                                         const llvm::Twine &name) const = 0;
+  virtual StackAddress allocateStack(IRGenFunction &IGF, SILType T,
+                                     bool isInEntryBlock,
+                                     const llvm::Twine &name) const = 0;
 
   /// Deallocate a variable of this type.
-  virtual void deallocateStack(IRGenFunction &IGF, Address addr,
+  virtual void deallocateStack(IRGenFunction &IGF, StackAddress addr,
                                SILType T) const = 0;
 
   /// Destroy the value of a variable of this type, then deallocate its
   /// memory.
-  virtual void destroyStack(IRGenFunction &IGF, Address addr,
+  virtual void destroyStack(IRGenFunction &IGF, StackAddress addr,
                             SILType T) const = 0;
 
   /// Copy or take a value out of one address and into another, destroying
@@ -481,6 +488,12 @@ public:
   virtual void initializeArrayWithTakeBackToFront(IRGenFunction &IGF,
                                        Address dest, Address src,
                                        llvm::Value *count, SILType T) const;
+
+  /// Get the native (abi) convention for a return value of this type.
+  const NativeConventionSchema &nativeReturnValueSchema(IRGenModule &IGM) const;
+
+  /// Get the native (abi) convention for a parameter value of this type.
+  const NativeConventionSchema &nativeParameterValueSchema(IRGenModule &IGM) const;
 };
 
 } // end namespace irgen

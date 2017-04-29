@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -121,7 +121,7 @@ namespace {
     TypeRepr *visit##CLASS##TypeRepr(CLASS##TypeRepr* type);
 #include "swift/AST/TypeReprNodes.def"
   };
-}
+} // end anonymous namespace
 
 TypeRepr *CloneVisitor::visitErrorTypeRepr(ErrorTypeRepr *T) {
   return new (Ctx) ErrorTypeRepr(T->getSourceRange());
@@ -221,6 +221,25 @@ TypeRepr *CloneVisitor::visitFixedTypeRepr(FixedTypeRepr *T) {
   return new (Ctx) FixedTypeRepr(T->getType(), T->getLoc());
 }
 
+TypeRepr *CloneVisitor::visitSILBoxTypeRepr(SILBoxTypeRepr *type) {
+  SmallVector<SILBoxTypeRepr::Field, 4> cloneFields;
+  SmallVector<TypeRepr *, 4> cloneArgs;
+  
+  for (auto &field : type->getFields())
+    cloneFields.push_back({field.VarOrLetLoc, field.Mutable,
+                           visit(field.FieldType)});
+  for (auto *arg : type->getGenericArguments())
+    cloneArgs.push_back(visit(arg));
+  
+  return new (Ctx) SILBoxTypeRepr(/*FIXME: Clone?*/type->getGenericParams(),
+                                type->getLBraceLoc(),
+                                Ctx.AllocateCopy(cloneFields),
+                                type->getRBraceLoc(),
+                                type->getArgumentLAngleLoc(),
+                                Ctx.AllocateCopy(cloneArgs),
+                                type->getArgumentRAngleLoc());
+}
+
 TypeRepr *TypeRepr::clone(const ASTContext &ctx) const {
   CloneVisitor visitor(ctx);
   return visitor.visit(const_cast<TypeRepr *>(this));
@@ -310,14 +329,8 @@ static void printGenericArgs(ASTPrinter &Printer, const PrintOptions &Opts,
     return;
 
   Printer << "<";
-  bool First = true;
-  for (auto Arg : Args) {
-    if (First)
-      First = false;
-    else
-      Printer << ", ";
-    printTypeRepr(Arg, Printer, Opts);
-  }
+  interleave(Args, [&](TypeRepr *Arg) { printTypeRepr(Arg, Printer, Opts); },
+             [&] { Printer << ", "; });
   Printer << ">";
 }
 
@@ -394,10 +407,11 @@ TupleTypeRepr::TupleTypeRepr(ArrayRef<TypeRepr *> Elements, SourceRange Parens,
                              ArrayRef<SourceLoc> underscoreLocs,
                              SourceLoc Ellipsis, unsigned EllipsisIdx)
     : TypeRepr(TypeReprKind::Tuple), NumElements(Elements.size()),
-      Parens(Parens), HasEllipsis(Ellipsis.isValid()) {
+      Parens(Parens) {
 
-  NameStatus = ElementNames.empty() ? NotNamed
-             : underscoreLocs.empty() ? HasNames : HasLabels;
+  TupleTypeReprBits.NameStatus = ElementNames.empty() ? NotNamed
+                               : underscoreLocs.empty() ? HasNames : HasLabels;
+  TupleTypeReprBits.HasEllipsis = Ellipsis.isValid();
 
   // Copy elements.
   std::uninitialized_copy(Elements.begin(), Elements.end(),
@@ -456,6 +470,32 @@ TupleTypeRepr *TupleTypeRepr::createEmpty(const ASTContext &C,
       /*Ellipsis=*/SourceLoc(), /*EllipsisIdx=*/0);
 }
 
+SILBoxTypeRepr *SILBoxTypeRepr::create(ASTContext &C,
+                      GenericParamList *GenericParams,
+                      SourceLoc LBraceLoc, ArrayRef<Field> Fields,
+                      SourceLoc RBraceLoc,
+                      SourceLoc ArgLAngleLoc, ArrayRef<TypeRepr *> GenericArgs,
+                      SourceLoc ArgRAngleLoc) {
+  return new (C) SILBoxTypeRepr(GenericParams,
+                                LBraceLoc, C.AllocateCopy(Fields), RBraceLoc,
+                                ArgLAngleLoc, C.AllocateCopy(GenericArgs),
+                                ArgRAngleLoc);
+}
+
+SourceLoc SILBoxTypeRepr::getStartLocImpl() const {
+  if (GenericParams && GenericParams->getSourceRange().isValid())
+    return GenericParams->getSourceRange().Start;
+  return LBraceLoc;
+}
+SourceLoc SILBoxTypeRepr::getEndLocImpl() const {
+  if (ArgRAngleLoc.isValid())
+    return ArgRAngleLoc;
+  return RBraceLoc;
+}
+SourceLoc SILBoxTypeRepr::getLocImpl() const {
+  return LBraceLoc;
+}
+
 void TupleTypeRepr::printImpl(ASTPrinter &Printer,
                               const PrintOptions &Opts) const {
   Printer.callPrintStructurePre(PrintStructureKind::TupleType);
@@ -506,14 +546,8 @@ void CompositionTypeRepr::printImpl(ASTPrinter &Printer,
   if (Types.empty()) {
     Printer << "Any";
   } else {
-    bool First = true;
-    for (auto T : Types) {
-      if (First)
-        First = false;
-      else
-        Printer << " & ";
-      printTypeRepr(T, Printer, Opts);
-    }
+    interleave(Types, [&](TypeRepr *T) { printTypeRepr(T, Printer, Opts); },
+               [&] { Printer << " & "; });
   }
 }
 
@@ -540,4 +574,10 @@ void InOutTypeRepr::printImpl(ASTPrinter &Printer,
 void FixedTypeRepr::printImpl(ASTPrinter &Printer,
                               const PrintOptions &Opts) const {
   getType().print(Printer, Opts);
+}
+
+void SILBoxTypeRepr::printImpl(ASTPrinter &Printer,
+                               const PrintOptions &Opts) const {
+  // TODO
+  Printer.printKeyword("sil_box");
 }

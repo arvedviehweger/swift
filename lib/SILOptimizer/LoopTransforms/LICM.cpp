@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -269,9 +269,7 @@ static bool hoistInstructions(SILLoop *Loop, DominanceInfo *DT,
     // that dominate all exits.
     if (!std::all_of(ExitingBBs.begin(), ExitingBBs.end(),
                      [=](SILBasicBlock *ExitBB) {
-          if (DT->dominates(CurBB, ExitBB))
-            return true;
-          return false;
+          return DT->dominates(CurBB, ExitBB);
         })) {
       DEBUG(llvm::dbgs() << "  skipping conditional block " << *CurBB << "\n");
       It.skipChildren();
@@ -436,7 +434,7 @@ protected:
   /// \brief Optimize the current loop nest.
   void optimizeLoop(SILLoop *CurrentLoop, ReadSet &SafeReads);
 };
-}
+} // end anonymous namespace
 
 bool LoopTreeOptimization::optimize() {
   // Process loops bottom up in the loop tree.
@@ -526,6 +524,10 @@ void LoopTreeOptimization::optimizeLoop(SILLoop *CurrentLoop,
 
 namespace {
 /// Hoist loop invariant code out of innermost loops.
+///
+/// Transforms are identified by type, not instance. Split this
+/// Into two types: "High-level Loop Invariant Code Motion"
+/// and "Loop Invariant Code Motion".
 class LICM : public SILFunctionTransform {
 
 public:
@@ -536,11 +538,6 @@ public:
   /// We only hoist semantic calls on high-level SIL because we can be sure that
   /// e.g. an Array as SILValue is really immutable (including its content).
   bool RunsOnHighLevelSil;
-  
-  StringRef getName() override {
-    return RunsOnHighLevelSil ? "High-level Loop Invariant Code Motion" :
-                                "Loop Invariant Code Motion";
-  }
 
   void run() override {
     SILFunction *F = getFunction();
@@ -576,7 +573,7 @@ public:
     }
   }
 };
-}
+} // end anonymous namespace
 
 SILTransform *swift::createLICM() {
   return new LICM(false);

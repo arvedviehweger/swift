@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -893,9 +893,9 @@ public:
   /// the abstraction pattern for its object type.
   AbstractionPattern getTupleElementType(unsigned index) const;
 
-  /// Given that the value being abstracted is an l-value type, return
-  /// the abstraction pattern for its object type.
-  AbstractionPattern getLValueObjectType() const;
+  /// Given that the value being abstracted is an l-value or inout type,
+  /// return the abstraction pattern for its object type.
+  AbstractionPattern getLValueOrInOutObjectType() const;
 
   /// Given that the value being abstracted is a function, return the
   /// abstraction pattern for its result type.

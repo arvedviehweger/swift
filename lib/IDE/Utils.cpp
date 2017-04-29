@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/IDE/Utils.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/Basic/Edit.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/ClangImporter/ClangModule.h"
 #include "swift/Frontend/Frontend.h"
@@ -24,7 +24,9 @@
 #include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
+#include "clang/Rewrite/Core/RewriteBuffer.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 
@@ -246,9 +248,8 @@ bool ide::initInvocationByClangArguments(ArrayRef<const char *> ArgList,
   ClangArgList.insert(ClangArgList.end(), ArgList.begin(), ArgList.end());
 
   // Create a new Clang compiler invocation.
-  llvm::IntrusiveRefCntPtr<clang::CompilerInvocation> ClangInvok{
-    clang::createInvocationFromCommandLine(ClangArgList, ClangDiags)
-  };
+  std::unique_ptr<clang::CompilerInvocation> ClangInvok =
+      clang::createInvocationFromCommandLine(ClangArgList, ClangDiags);
   if (!ClangInvok || ClangDiags->hasErrorOccurred()) {
     for (auto I = DiagBuf.err_begin(), E = DiagBuf.err_end(); I != E; ++I) {
       Error += I->second;
@@ -285,7 +286,7 @@ bool ide::initInvocationByClangArguments(ArrayRef<const char *> ArgList,
         break;
       case clang::frontend::IndexHeaderMap:
         CCArgs.push_back("-index-header-map");
-        SWIFT_FALLTHROUGH;
+        LLVM_FALLTHROUGH;
       case clang::frontend::Angled: {
         std::string Flag;
         if (Entry.IsFramework)
@@ -342,7 +343,7 @@ bool ide::initInvocationByClangArguments(ArrayRef<const char *> ArgList,
     CCArgs.push_back(Entry);
   }
 
-  if (!ClangInvok->getLangOpts()->CompilingModule) {
+  if (!ClangInvok->getLangOpts()->isCompilingModule()) {
     CCArgs.push_back("-Xclang");
     llvm::SmallString<64> Str;
     Str += "-fmodule-name=";
@@ -780,3 +781,150 @@ void ide::collectModuleNames(StringRef SDKPath,
   }
 }
 
+DeclNameViewer::DeclNameViewer(StringRef Text) {
+  auto ArgStart = Text.find_first_of('(');
+  if (ArgStart == StringRef::npos) {
+    BaseName = Text;
+    return;
+  }
+  BaseName = Text.substr(0, ArgStart);
+  auto ArgEnd = Text.find_last_of(')');
+  assert(ArgEnd != StringRef::npos);
+  StringRef AllArgs = Text.substr(ArgStart + 1, ArgEnd - ArgStart - 1);
+  AllArgs.split(Labels, ":");
+  if (Labels.empty())
+    return;
+  assert(Labels.back().empty());
+  Labels.pop_back();
+}
+
+unsigned DeclNameViewer::commonPartsCount(DeclNameViewer &Other) const {
+  if (base() != Other.base())
+    return 0;
+  unsigned Result = 1;
+  unsigned Len = std::min(args().size(), Other.args().size());
+  for (unsigned I = 0; I < Len; ++ I) {
+    if (args()[I] == Other.args()[I])
+      Result ++;
+    else
+      return Result;
+  }
+  return Result;
+}
+
+void swift::ide::SourceEditConsumer::
+accept(SourceManager &SM, SourceLoc Loc, StringRef Text,
+       ArrayRef<NoteRegion> SubRegions) {
+  accept(SM, CharSourceRange(Loc, 0), Text, SubRegions);
+}
+
+void swift::ide::SourceEditConsumer::
+accept(SourceManager &SM, CharSourceRange Range, StringRef Text,
+       ArrayRef<NoteRegion> SubRegions) {
+  accept(SM, RegionType::ActiveCode, {{Range, Text, SubRegions}});
+}
+
+void swift::ide::SourceEditConsumer::
+insertAfter(SourceManager &SM, SourceLoc Loc, StringRef Text,
+            ArrayRef<NoteRegion> SubRegions) {
+  accept(SM, Lexer::getLocForEndOfToken(SM, Loc), Text, SubRegions);
+}
+
+struct swift::ide::SourceEditJsonConsumer::Implementation {
+  llvm::raw_ostream &OS;
+  std::vector<SingleEdit> AllEdits;
+  Implementation(llvm::raw_ostream &OS) : OS(OS) {}
+  ~Implementation() {
+    writeEditsInJson(AllEdits, OS);
+  }
+  void accept(SourceManager &SM, CharSourceRange Range,
+              llvm::StringRef Text) {
+    AllEdits.push_back({SM, Range, Text});
+  }
+};
+
+swift::ide::SourceEditJsonConsumer::SourceEditJsonConsumer(llvm::raw_ostream &OS) :
+  Impl(*new Implementation(OS)) {}
+
+swift::ide::SourceEditJsonConsumer::~SourceEditJsonConsumer() { delete &Impl; }
+
+void swift::ide::SourceEditJsonConsumer::
+accept(SourceManager &SM, RegionType Type, ArrayRef<Replacement> Replacements) {
+  for (const auto &Replacement: Replacements) {
+    Impl.accept(SM, Replacement.Range, Replacement.Text);
+  }
+}
+namespace {
+class ClangFileRewriterHelper {
+  unsigned InterestedId;
+  clang::RewriteBuffer RewriteBuf;
+  bool HasChange;
+  llvm::raw_ostream &OS;
+
+  void removeCommentLines(clang::RewriteBuffer &Buffer, StringRef Input,
+                          StringRef LineHeader) {
+    size_t Pos = 0;
+    while (true) {
+      Pos = Input.find(LineHeader, Pos);
+      if (Pos == StringRef::npos)
+        break;
+      Pos = Input.substr(0, Pos).rfind("//");
+      assert(Pos != StringRef::npos);
+      size_t EndLine = Input.find('\n', Pos);
+      assert(EndLine != StringRef::npos);
+      ++EndLine;
+      Buffer.RemoveText(Pos, EndLine-Pos);
+      Pos = EndLine;
+    }
+  }
+
+public:
+  ClangFileRewriterHelper(SourceManager &SM, unsigned InterestedId,
+                          llvm::raw_ostream &OS)
+  : InterestedId(InterestedId), HasChange(false), OS(OS) {
+    StringRef Input(SM.getLLVMSourceMgr().getMemoryBuffer(InterestedId)->
+                    getBuffer());
+    RewriteBuf.Initialize(Input);
+    removeCommentLines(RewriteBuf, Input, "RUN");
+    removeCommentLines(RewriteBuf, Input, "CHECK");
+  }
+
+  void replaceText(SourceManager &SM, CharSourceRange Range, StringRef Text) {
+    auto BufferId = SM.getIDForBufferIdentifier(SM.
+      getBufferIdentifierForLoc(Range.getStart())).getValue();
+    if (BufferId == InterestedId) {
+      HasChange = true;
+      RewriteBuf.ReplaceText(
+                             SM.getLocOffsetInBuffer(Range.getStart(), BufferId),
+                             Range.str().size(), Text);
+    }
+  }
+
+  ~ClangFileRewriterHelper() {
+    if (HasChange)
+      RewriteBuf.write(OS);
+  }
+};
+} // end anonymous namespace
+struct swift::ide::SourceEditOutputConsumer::Implementation {
+  ClangFileRewriterHelper Rewriter;
+  Implementation(SourceManager &SM, unsigned BufferId, llvm::raw_ostream &OS)
+  : Rewriter(SM, BufferId, OS) {}
+  void accept(SourceManager &SM, CharSourceRange Range, StringRef Text) {
+    Rewriter.replaceText(SM, Range, Text);
+  }
+};
+
+swift::ide::SourceEditOutputConsumer::
+SourceEditOutputConsumer(SourceManager &SM, unsigned BufferId,
+  llvm::raw_ostream &OS) : Impl(*new Implementation(SM, BufferId, OS)) {}
+
+swift::ide::SourceEditOutputConsumer::~SourceEditOutputConsumer() { delete &Impl; }
+
+void swift::ide::SourceEditOutputConsumer::
+accept(SourceManager &SM, RegionType RegionType,
+       ArrayRef<Replacement> Replacements) {
+  for (const auto &Replacement : Replacements) {
+    Impl.accept(SM, Replacement.Range, Replacement.Text);
+  }
+}
